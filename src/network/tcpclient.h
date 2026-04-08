@@ -3,37 +3,35 @@
 
 #include <QObject>
 #include <QTcpSocket>
-#include <QHostAddress>
+#include <QTimer>
+#include <QByteArray>
 
 class TcpClient : public QObject
 {
     Q_OBJECT
-
 public:
     explicit TcpClient(QObject *parent = nullptr);
     ~TcpClient();
-
-    void connectToHost(const QHostAddress &address, quint16 port);
-    void disconnectFromHost();
-    bool isConnected() const;
-    qint64 sendData(const QByteArray &data);
-
+    bool connectTo(const QString &host, quint16 port);
+    void disconnect();
+    bool isConnected() const { return m_socket && m_socket->state() == QAbstractSocket::ConnectedState; }
+    void sendFrame(const QByteArray &frame);
+    void setTimeout(int ms) { m_timeout = ms; }
 signals:
     void connected();
     void disconnected();
-    void dataReceived(const QByteArray &data);
-    void errorOccurred(const QString &errorString);
-
+    void readyRead(const QByteArray &data);
+    void connectionError(const QString &error);
+    void timeout();
 private slots:
-    void onConnected();
-    void onDisconnected();
     void onReadyRead();
-    void onError(QAbstractSocket::SocketError socketError);
-
+    void onDisconnected();
+    void onError(QAbstractSocket::SocketError error);
+    void onWaitTimeout();
 private:
     QTcpSocket *m_socket;
-    QHostAddress m_address;
-    quint16 m_port;
+    QTimer *m_waitTimer;
+    int m_timeout;
 };
 
-#endif // TCPCLIENT_H
+#endif
