@@ -2,54 +2,30 @@
 #define MOCKCONFIG_H
 
 #include <QObject>
-#include <QString>
 #include <QMap>
-
-struct MockConfigData
-{
-    QString serverName;
-    quint16 serverPort;
-    bool autoResponse;
-    int responseDelayMs;
-    QByteArray mockResponseData;
-};
+#include <QByteArray>
 
 class MockConfig : public QObject
 {
     Q_OBJECT
-
 public:
-    static MockConfig& instance();
-
-    void loadFromFile(const QString &filePath);
-    void saveToFile(const QString &filePath);
-    void reset();
-
-    QString getServerName() const;
-    void setServerName(const QString &name);
-    quint16 getServerPort() const;
-    void setServerPort(quint16 port);
-    bool isAutoResponseEnabled() const;
-    void setAutoResponseEnabled(bool enabled);
-    int getResponseDelayMs() const;
-    void setResponseDelayMs(int delayMs);
-    QByteArray getMockResponseData() const;
-    void setMockResponseData(const QByteArray &data);
-
+    static MockConfig* instance();
+    QByteArray getResponse(quint8 cmd, quint8 sub, quint8 type) const;
+    void setResponse(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data);
+    void resetToDefault(quint8 cmd, quint8 sub, quint8 type);
+    void resetAll();
+    void setCoordinateBase(double x, double y, double z);
+    void getCoordinateBase(double &x, double &y, double &z) const;
 signals:
     void configChanged();
-
 private:
     explicit MockConfig(QObject *parent = nullptr);
-    ~MockConfig();
-    MockConfig(const MockConfig&) = delete;
-    MockConfig& operator=(const MockConfig&) = delete;
+    QByteArray buildDefaultCoordinateData(double x, double y, double z);
+    QByteArray buildDefaultDeviceInfo();
+    QByteArray buildDefaultMachineStatus();
 
-    QString m_serverName;
-    quint16 m_serverPort;
-    bool m_autoResponse;
-    int m_responseDelayMs;
-    QByteArray m_mockResponseData;
+    QMap<QString, QByteArray> m_customResponses;
+    double m_coordBaseX, m_coordBaseY, m_coordBaseZ;
 };
 
-#endif // MOCKCONFIG_H
+#endif
