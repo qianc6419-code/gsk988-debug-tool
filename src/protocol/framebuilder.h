@@ -2,22 +2,17 @@
 #define FRAMEBUILDER_H
 
 #include <QByteArray>
-
 class FrameBuilder
 {
 public:
-    FrameBuilder();
-
-    void reset();
-    void setHeader(quint8 header);
-    void setCommand(quint8 command);
-    void setPayload(const QByteArray &payload);
-    QByteArray build();
-
+    static QByteArray buildFrame(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data);
+    static bool parseFrame(const QByteArray &frame, quint8 &outCmd, quint8 &outSub,
+                         quint8 &outType, QByteArray &outData, QString &error);
+    static quint8 calculateXor(const QByteArray &data);
+    static bool isValidFrameHeader(const QByteArray &frame);
+    static quint16 getFrameLength(const QByteArray &frame);
 private:
-    quint8 m_header;
-    quint8 m_command;
-    QByteArray m_payload;
+    static const quint8 FRAME_HEADER_HIGH = 0x5A;
+    static const quint8 FRAME_HEADER_LOW = 0xA5;
 };
-
-#endif // FRAMEBUILDER_H
+#endif

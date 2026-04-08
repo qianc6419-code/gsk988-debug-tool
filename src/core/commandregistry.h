@@ -2,39 +2,39 @@
 #define COMMANDREGISTRY_H
 
 #include <QObject>
-#include <QMap>
+#include <QVector>
 #include <QString>
+#include <QVariant>
 
 struct CommandInfo
 {
-    quint8 commandCode;
-    QString name;
-    QString description;
-    int paramCount;
+    quint8 cmd;           // 命令码
+    quint8 sub;           // 子码
+    quint8 type;          // 类型
+    QString name;         // 命令名称
+    QString description;  // 说明
+    QString category;     // 类别: 读/写/控制
+    QString function;     // 功能分组
+    bool hasParams;       // 是否有参数
+    QString paramHint;    // 参数提示
+    QVariant paramValue;
 };
 
 class CommandRegistry : public QObject
 {
     Q_OBJECT
-
 public:
-    static CommandRegistry& instance();
-
-    void registerCommand(quint8 code, const QString &name, const QString &description, int paramCount);
-    CommandInfo getCommand(quint8 code) const;
-    QList<CommandInfo> getAllCommands() const;
-    QString getCommandName(quint8 code) const;
-
+    static CommandRegistry* instance();
+    const QVector<CommandInfo>& allCommands() const { return m_commands; }
+    CommandInfo getCommand(quint8 cmd, quint8 sub, quint8 type) const;
+    QVector<CommandInfo> filterByCategory(const QString &category) const;
+    QVector<CommandInfo> filterByFunction(const QString &function) const;
+    QVector<CommandInfo> search(const QString &keyword) const;
 signals:
-    void commandRegistered(quint8 code, const QString &name);
-
+    void commandChanged();
 private:
     explicit CommandRegistry(QObject *parent = nullptr);
-    ~CommandRegistry();
-    CommandRegistry(const CommandRegistry&) = delete;
-    CommandRegistry& operator=(const CommandRegistry&) = delete;
-
-    QMap<quint8, CommandInfo> m_commands;
+    void registerAllCommands();
+    QVector<CommandInfo> m_commands;
 };
-
-#endif // COMMANDREGISTRY_H
+#endif
