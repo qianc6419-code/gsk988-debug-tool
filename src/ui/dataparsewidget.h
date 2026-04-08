@@ -2,34 +2,22 @@
 #define DATAPARSEWIDGET_H
 
 #include <QWidget>
-#include <QTreeWidget>
 #include <QTextEdit>
+#include <QPushButton>
 
 class DataParseWidget : public QWidget
 {
     Q_OBJECT
-
 public:
     explicit DataParseWidget(QWidget *parent = nullptr);
-    ~DataParseWidget();
-
-    void setRawData(const QByteArray &data);
-    void clearParsedData();
-
-signals:
-    void dataParsed(const QString &parsedText);
-
 private slots:
-    void onItemExpanded(QTreeWidgetItem *item);
-    void onExportData();
-
+    void onParseClicked();
 private:
     void setupUi();
-    void parseData(const QByteArray &data);
+    QString parseHexToStructure(const QString &hexInput);
 
-    QTreeWidget *m_treeWidget;
-    QTextEdit *m_rawDataEdit;
-    QTextEdit *m_parsedTextEdit;
+    QTextEdit *m_inputEdit;
+    QTextEdit *m_outputEdit;
+    QPushButton *m_parseBtn;
 };
-
-#endif // DATAPARSEWIDGET_H
+#endif

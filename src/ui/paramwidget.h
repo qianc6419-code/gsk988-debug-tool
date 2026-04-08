@@ -2,37 +2,30 @@
 #define PARAMWIDGET_H
 
 #include <QWidget>
+#include <QTreeWidget>
 #include <QTableWidget>
+#include <QLineEdit>
 #include <QPushButton>
 
 class ParamWidget : public QWidget
 {
     Q_OBJECT
-
 public:
     explicit ParamWidget(QWidget *parent = nullptr);
-    ~ParamWidget();
-
-    void loadParameters();
-    void saveParameters();
-    void resetToDefaults();
-
 signals:
-    void parametersChanged();
-
+    void readParam(quint16 paramNo);
+    void writeParam(quint16 paramNo, const QVariant &value);
 private slots:
-    void onParameterChanged(int row, int column);
-    void onLoadParams();
-    void onSaveParams();
-    void onResetParams();
-
+    void onParamSelected(QTreeWidgetItem *item, int column);
+    void onReadClicked();
+    void onWriteClicked();
 private:
     void setupUi();
 
-    QTableWidget *m_paramTableWidget;
-    QPushButton *m_loadButton;
-    QPushButton *m_saveButton;
-    QPushButton *m_resetButton;
+    QTreeWidget *m_paramTree;
+    QTableWidget *m_paramDetailTable;
+    QLineEdit *m_valueEdit;
+    QPushButton *m_readBtn;
+    QPushButton *m_writeBtn;
 };
-
-#endif // PARAMWIDGET_H
+#endif
