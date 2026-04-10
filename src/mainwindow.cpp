@@ -195,14 +195,14 @@ void MainWindow::onResponseReceived(const QByteArray& frame)
     m_logTab->logFrame(frame, false, desc);
     m_realtimeTab->appendHexDisplay(frame, false);
 
+    // Route to appropriate tab FIRST (before starting polling)
+    m_realtimeTab->updateData(resp);
+
     // Start polling after receiving the permission (0x0A) response
     if (m_needStartPolling) {
         m_needStartPolling = false;
         m_realtimeTab->startPolling();
     }
-
-    // Route to appropriate tab
-    m_realtimeTab->updateData(resp);
 
     // Only show in command tab if this was a manual send
     if (m_waitingManualResponse) {
