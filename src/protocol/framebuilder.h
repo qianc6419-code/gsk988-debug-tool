@@ -15,10 +15,10 @@ public:
     // Validate frame integrity (head, tail, length consistency)
     static bool validateFrame(const QByteArray& frame);
 
-    static constexpr char FRAME_HEAD_0 = static_cast<char>(0x93);
-    static constexpr char FRAME_HEAD_1 = static_cast<char>(0x00);
-    static constexpr char FRAME_TAIL_0 = static_cast<char>(0x55);
-    static constexpr char FRAME_TAIL_1 = static_cast<char>(0xAA);
+    static constexpr quint8 FRAME_HEAD_0 = 0x93;
+    static constexpr quint8 FRAME_HEAD_1 = 0x00;
+    static constexpr quint8 FRAME_TAIL_0 = 0x55;
+    static constexpr quint8 FRAME_TAIL_1 = 0xAA;
 
     static const QByteArray REQUEST_ID;
     static const QByteArray RESPONSE_ID;

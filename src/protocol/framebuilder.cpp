@@ -12,8 +12,8 @@ QByteArray FrameBuilder::buildRequestFrame(const QByteArray& dataField)
     frame.reserve(2 + 2 + len + 2);
 
     // Head
-    frame.append(FRAME_HEAD_0);
-    frame.append(FRAME_HEAD_1);
+    frame.append(static_cast<char>(FRAME_HEAD_0));
+    frame.append(static_cast<char>(FRAME_HEAD_1));
 
     // Length (little-endian)
     frame.append(static_cast<char>(len & 0xFF));
@@ -24,8 +24,8 @@ QByteArray FrameBuilder::buildRequestFrame(const QByteArray& dataField)
     frame.append(dataField);
 
     // Tail
-    frame.append(FRAME_TAIL_0);
-    frame.append(FRAME_TAIL_1);
+    frame.append(static_cast<char>(FRAME_TAIL_0));
+    frame.append(static_cast<char>(FRAME_TAIL_1));
 
     return frame;
 }
@@ -37,8 +37,8 @@ QByteArray FrameBuilder::buildResponseFrame(const QByteArray& dataField)
     QByteArray frame;
     frame.reserve(2 + 2 + len + 2);
 
-    frame.append(FRAME_HEAD_0);
-    frame.append(FRAME_HEAD_1);
+    frame.append(static_cast<char>(FRAME_HEAD_0));
+    frame.append(static_cast<char>(FRAME_HEAD_1));
 
     frame.append(static_cast<char>(len & 0xFF));
     frame.append(static_cast<char>((len >> 8) & 0xFF));
@@ -46,8 +46,8 @@ QByteArray FrameBuilder::buildResponseFrame(const QByteArray& dataField)
     frame.append(RESPONSE_ID);
     frame.append(dataField);
 
-    frame.append(FRAME_TAIL_0);
-    frame.append(FRAME_TAIL_1);
+    frame.append(static_cast<char>(FRAME_TAIL_0));
+    frame.append(static_cast<char>(FRAME_TAIL_1));
 
     return frame;
 }
