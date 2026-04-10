@@ -5,6 +5,9 @@ TEMPLATE = app
 CONFIG += c++14
 INCLUDEPATH += src
 
+msvc: QMAKE_CXXFLAGS += /utf-8
+msvc: QMAKE_CFLAGS += /utf-8
+
 SOURCES += \
     src/main.cpp \
     src/mainwindow.cpp \
