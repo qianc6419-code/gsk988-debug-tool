@@ -2,89 +2,61 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-#include <QMenuBar>
-#include <QMenu>
-#include <QAction>
-#include <QToolBar>
-#include <QStatusBar>
-#include <QDockWidget>
-#include <QTextEdit>
+#include <QLineEdit>
+#include <QSpinBox>
+#include <QComboBox>
+#include <QPushButton>
 #include <QLabel>
+#include <QTabWidget>
 
+class Gsk988Protocol;
 class TcpClient;
 class MockServer;
 class RealtimeWidget;
-class CommandTableWidget;
-class DataParseWidget;
+class CommandWidget;
+class ParseWidget;
 class LogWidget;
-class ParamWidget;
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
-
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow();
 
 private slots:
-    void onConnectAction();
-    void onDisconnectAction();
-    void onStartMockServerAction();
-    void onStopMockServerAction();
-    void onExitAction();
-    void onAboutAction();
-    void onSendCommandAction();
-    void onClearLogAction();
-    void onSaveLogAction();
-    void onLoadConfigAction();
-    void onSaveConfigAction();
+    void onConnectClicked();
+    void onResponseReceived(const QByteArray& frame);
+    void onResponseTimeout();
 
 private:
-    void setupUi();
-    void createMenus();
-    void createToolBars();
-    void createDockWidgets();
-    void createStatusBar();
-    void createConnections();
+    void setupToolBar();
+    void setupTabs();
+    void setupConnections();
+    void updateConnectionIndicator(int state);
+    void notifyXtuis(const QString& title, const QString& content);
 
-    // Network
-    TcpClient *m_tcpClient;
-    MockServer *m_mockServer;
+    enum ConnState { Disconnected = 0, Connected = 1, Error = 2 };
 
-    // UI Widgets
-    RealtimeWidget *m_realtimeWidget;
-    CommandTableWidget *m_commandTableWidget;
-    DataParseWidget *m_dataParseWidget;
-    LogWidget *m_logWidget;
-    ParamWidget *m_paramWidget;
+    Gsk988Protocol* m_protocol;
+    TcpClient* m_client;
+    MockServer* m_mockServer;
 
-    // Menus
-    QMenu *m_fileMenu;
-    QMenu *m_connectionMenu;
-    QMenu *m_commandMenu;
-    QMenu *m_viewMenu;
-    QMenu *m_helpMenu;
+    QLineEdit* m_ipEdit;
+    QSpinBox* m_portSpin;
+    QComboBox* m_modeCombo;
+    QPushButton* m_connectBtn;
+    QLabel* m_statusIndicator;
+    QLabel* m_statusLabel;
 
-    // Actions
-    QAction *m_connectAction;
-    QAction *m_disconnectAction;
-    QAction *m_startMockServerAction;
-    QAction *m_stopMockServerAction;
-    QAction *m_exitAction;
-    QAction *m_sendCommandAction;
-    QAction *m_clearLogAction;
-    QAction *m_saveLogAction;
-    QAction *m_loadConfigAction;
-    QAction *m_saveConfigAction;
-    QAction *m_aboutAction;
+    QTabWidget* m_tabWidget;
+    RealtimeWidget* m_realtimeTab;
+    CommandWidget* m_commandTab;
+    ParseWidget* m_parseTab;
+    LogWidget* m_logTab;
 
-    // Toolbars
-    QToolBar *m_mainToolBar;
-
-    // Status bar
-    QLabel *m_statusLabel;
-    QLabel *m_connectionStatusLabel;
+    bool m_waitingManualResponse;
+    bool m_needStartPolling;
 };
 
 #endif // MAINWINDOW_H

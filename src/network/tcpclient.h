@@ -10,28 +10,30 @@ class TcpClient : public QObject
 {
     Q_OBJECT
 public:
-    explicit TcpClient(QObject *parent = nullptr);
+    explicit TcpClient(QObject* parent = nullptr);
     ~TcpClient();
-    bool connectTo(const QString &host, quint16 port);
+
+    void connectTo(const QString& ip, quint16 port);
     void disconnect();
-    bool isConnected() const { return m_socket && m_socket->state() == QAbstractSocket::ConnectedState; }
-    void sendFrame(const QByteArray &frame);
-    void setTimeout(int ms) { m_timeout = ms; }
+    bool isConnected() const;
+    void sendFrame(const QByteArray& frame);
+
 signals:
     void connected();
     void disconnected();
-    void readyRead(const QByteArray &data);
-    void connectionError(const QString &error);
-    void timeout();
+    void connectionError(const QString& msg);
+    void responseReceived(const QByteArray& frame);
+    void responseTimeout();
+
 private slots:
     void onReadyRead();
-    void onDisconnected();
-    void onError(QAbstractSocket::SocketError error);
-    void onWaitTimeout();
+    void onTimeout();
+
 private:
-    QTcpSocket *m_socket;
-    QTimer *m_waitTimer;
-    int m_timeout;
+    QTcpSocket* m_socket;
+    QByteArray m_buffer;
+    QTimer* m_timeoutTimer;
+    QByteArray m_pendingFrame;
 };
 
-#endif
+#endif // TCPCLIENT_H

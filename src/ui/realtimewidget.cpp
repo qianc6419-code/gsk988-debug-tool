@@ -1,249 +1,655 @@
 #include "realtimewidget.h"
-#include <QVBoxLayout>
+#include "protocol/gsk988protocol.h"
 #include <QGridLayout>
-#include <QGroupBox>
-#include <QLabel>
-#include <QTextEdit>
-#include <QDebug>
-#include <QScrollBar>
+#include <QFormLayout>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QScrollArea>
+#include <cstring>
 
-RealtimeWidget::RealtimeWidget(QWidget *parent)
+// ========== Poll Items ==========
+const RealtimeWidget::PollItem RealtimeWidget::pollItems[] = {
+    // Device status
+    {0x10, QByteArray(1, '\0')},            // 0:  运行模式
+    {0x11, QByteArray(1, '\0')},            // 1:  运行状态
+    {0x22, QByteArray(1, '\0')},            // 2:  暂停状态
+    // Feed speeds/override
+    {0x1A, QByteArray("\x00\x00\x00", 3)},  // 3:  进给编程速度
+    {0x1A, QByteArray("\x01\x00\x00", 3)},  // 4:  进给实际速度
+    {0x1A, QByteArray("\x02\x00\x00", 3)},  // 5:  进给倍率
+    // Spindle speeds/override
+    {0x1A, QByteArray("\x03\x00\x00", 3)},  // 6:  主轴编程速度
+    {0x1A, QByteArray("\x04\x00\x00", 3)},  // 7:  主轴实际速度
+    {0x1A, QByteArray("\x05\x00\x00", 3)},  // 8:  主轴倍率
+    // Other overrides
+    {0x1A, QByteArray("\x06\x00\x00", 3)},  // 9:  快速倍率
+    {0x1A, QByteArray("\x07\x00\x00", 3)},  // 10: 手动倍率
+    {0x1A, QByteArray("\x08\x00\x00", 3)},  // 11: 手轮倍率
+    // Coordinates (0x15 with axis type)
+    {0x15, QByteArray("\x00\x00", 2)},      // 12: 机械坐标
+    {0x15, QByteArray("\x00\x01", 2)},      // 13: 绝对坐标
+    {0x15, QByteArray("\x00\x02", 2)},      // 14: 相对坐标
+    {0x15, QByteArray("\x00\x03", 2)},      // 15: 余移动量
+    // Machining info
+    {0x16, QByteArray(1, '\0')},            // 16: 加工件数
+    {0x17, QByteArray(1, '\0')},            // 17: 当前刀号
+    {0x18, QByteArray(1, '\0')},            // 18: 运行时间
+    {0x19, QByteArray(1, '\0')},            // 19: 切削时间
+    // Program info
+    {0x12, QByteArray(1, '\0')},            // 20: 运行程序名
+    {0x1D, QByteArray(1, '\0')},            // 21: 当前段号
+    {0x23, QByteArray(1, '\0')},            // 22: CNC执行行号
+    // Modal info
+    {0x1B, QByteArray(1, '\0')},            // 23: G模态
+    {0x1C, QByteArray(1, '\0')},            // 24: M模态
+    // Alarm
+    {0x81, QByteArray()},                   // 25: CNC报警数
+};
+
+// ========== Constructor ==========
+
+RealtimeWidget::RealtimeWidget(QWidget* parent)
     : QWidget(parent)
-    , m_statusCard(nullptr)
-    , m_machineCoordCard(nullptr)
-    , m_workCoordCard(nullptr)
-    , m_alarmCard(nullptr)
-    , m_runStateLabel(nullptr)
-    , m_modeLabel(nullptr)
-    , m_feedLabel(nullptr)
-    , m_spindleLabel(nullptr)
-    , m_toolLabel(nullptr)
-    , m_mxLabel(nullptr), m_myLabel(nullptr), m_mzLabel(nullptr)
-    , m_wxLabel(nullptr), m_wyLabel(nullptr), m_wzLabel(nullptr)
-    , m_alarmCountLabel(nullptr)
-    , m_alarmDetailLabel(nullptr)
-    , m_rawDataEdit(nullptr)
+    , m_pollIndex(0)
+    , m_pollCount(PI_COUNT)
+    , m_cycleActive(false)
 {
-    setupUi();
+    setupUI();
+
+    // Timer for auto-refresh interval (between cycles)
+    m_cycleDelayTimer = new QTimer(this);
+    m_cycleDelayTimer->setSingleShot(true);
+    connect(m_cycleDelayTimer, &QTimer::timeout, this, [this]() {
+        if (m_autoRefreshCheck->isChecked())
+            startCycle();
+    });
+
+    // Manual refresh
+    connect(m_manualRefreshBtn, &QPushButton::clicked, this, [this]() {
+        startCycle();
+    });
+
+    // Auto-refresh toggle
+    connect(m_autoRefreshCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_intervalCombo->setEnabled(checked);
+        if (!checked)
+            m_cycleDelayTimer->stop();
+    });
 }
 
-void RealtimeWidget::setupUi()
+// ========== Helpers ==========
+
+static QLabel* makeValueLabel()
 {
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(10, 10, 10, 10);
-    mainLayout->setSpacing(10);
-
-    // Top 2x2 grid of cards
-    QGridLayout *gridLayout = new QGridLayout();
-    gridLayout->setSpacing(10);
-
-    // Status card
-    m_statusCard = new QGroupBox(QString::fromUtf8("\350\256\276\345\217\221\345\221\230\347\212\266\346\200\201"));
-    QVBoxLayout *statusLayout = new QVBoxLayout(m_statusCard);
-    m_runStateLabel = new QLabel(QString::fromUtf8("\20181"));
-    m_runStateLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: green;");
-    m_modeLabel = new QLabel(QString::fromUtf8("\346\250\241\345\274\217: \20181"));
-    m_feedLabel = new QLabel(QString::fromUtf8("\350\277\207\347\273\203: \20181%"));
-    m_spindleLabel = new QLabel(QString::fromUtf8("\344\270\273\350\275\257: \20181 RPM"));
-    m_toolLabel = new QLabel(QString::fromUtf8("\345\210\266\345\217\267: T\20181"));
-    statusLayout->addWidget(m_runStateLabel);
-    statusLayout->addWidget(m_modeLabel);
-    statusLayout->addWidget(m_feedLabel);
-    statusLayout->addWidget(m_spindleLabel);
-    statusLayout->addWidget(m_toolLabel);
-    m_statusCard->setLayout(statusLayout);
-    m_statusCard->setFixedHeight(100);
-
-    // Machine coord card
-    m_machineCoordCard = new QGroupBox(QString::fromUtf8("\346\234\272\346\240\274\345\235\200\345\277\203"));
-    QVBoxLayout *machineLayout = new QVBoxLayout(m_machineCoordCard);
-    m_mxLabel = new QLabel("X: \20181");
-    m_myLabel = new QLabel("Y: \20181");
-    m_mzLabel = new QLabel("Z: \20181");
-    QFont monoFont("Consolas", 12);
-    m_mxLabel->setFont(monoFont);
-    m_myLabel->setFont(monoFont);
-    m_mzLabel->setFont(monoFont);
-    machineLayout->addWidget(m_mxLabel);
-    machineLayout->addWidget(m_myLabel);
-    machineLayout->addWidget(m_mzLabel);
-    m_machineCoordCard->setLayout(machineLayout);
-    m_machineCoordCard->setFixedHeight(100);
-
-    // Work coord card
-    m_workCoordCard = new QGroupBox(QString::fromUtf8("\345\267\245\344\273\244\345\235\200\345\277\203"));
-    QVBoxLayout *workLayout = new QVBoxLayout(m_workCoordCard);
-    m_wxLabel = new QLabel("X: \20181");
-    m_wyLabel = new QLabel("Y: \20181");
-    m_wzLabel = new QLabel("Z: \20181");
-    m_wxLabel->setFont(monoFont);
-    m_wyLabel->setFont(monoFont);
-    m_wzLabel->setFont(monoFont);
-    workLayout->addWidget(m_wxLabel);
-    workLayout->addWidget(m_wyLabel);
-    workLayout->addWidget(m_wzLabel);
-    m_workCoordCard->setLayout(workLayout);
-    m_workCoordCard->setFixedHeight(100);
-
-    // Alarm card
-    m_alarmCard = new QGroupBox(QString::fromUtf8("\346\212\245\350\256\260"));
-    QVBoxLayout *alarmLayout = new QVBoxLayout(m_alarmCard);
-    m_alarmCountLabel = new QLabel(QString::fromUtf8("\345\205\263 \20181 \346\235\241\346\212\245\350\256\260"));
-    m_alarmDetailLabel = new QLabel(QString::fromUtf8("\346\227\240\346\212\245\350\256\260"));
-    m_alarmDetailLabel->setStyleSheet("color: green;");
-    alarmLayout->addWidget(m_alarmCountLabel);
-    alarmLayout->addWidget(m_alarmDetailLabel);
-    m_alarmCard->setLayout(alarmLayout);
-    m_alarmCard->setFixedHeight(100);
-
-    gridLayout->addWidget(m_statusCard, 0, 0);
-    gridLayout->addWidget(m_machineCoordCard, 0, 1);
-    gridLayout->addWidget(m_workCoordCard, 1, 0);
-    gridLayout->addWidget(m_alarmCard, 1, 1);
-
-    mainLayout->addLayout(gridLayout);
-
-    // Raw data group at bottom
-    QGroupBox *rawGroup = new QGroupBox(QString::fromUtf8("\345\216\237\345\247\220\345\220\215\346\225\260\346\215\256"));
-    QVBoxLayout *rawLayout = new QVBoxLayout(rawGroup);
-    m_rawDataEdit = new QTextEdit();
-    m_rawDataEdit->setReadOnly(true);
-    m_rawDataEdit->setFont(QFont("Consolas", 11));
-    m_rawDataEdit->setStyleSheet("background-color: #1e1e2e; color: #a0e0a0;");
-    m_rawDataEdit->setMaximumHeight(120);
-    rawLayout->addWidget(m_rawDataEdit);
-    rawGroup->setLayout(rawLayout);
-
-    mainLayout->addWidget(rawGroup);
-
-    setLayout(mainLayout);
+    auto* lbl = new QLabel("--");
+    lbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    return lbl;
 }
 
-void RealtimeWidget::updateDeviceInfo(const QMap<QString, QVariant> &data)
+static quint32 readLE32(const QByteArray& ba, int offset)
 {
-    QString modelName = data.value("modelName").toString();
-    QString softwareVersion = data.value("softwareVersion").toString();
-    m_runStateLabel->setText(modelName + " v" + softwareVersion);
-    m_runStateLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: blue;");
+    return static_cast<quint8>(ba[offset]) |
+           (static_cast<quint8>(ba[offset + 1]) << 8) |
+           (static_cast<quint8>(ba[offset + 2]) << 16) |
+           (static_cast<quint8>(ba[offset + 3]) << 24);
 }
 
-void RealtimeWidget::updateMachineStatus(const QMap<QString, QVariant> &data)
+static quint16 readLE16(const QByteArray& ba, int offset)
 {
-    QString runStateText = data.value("runStateText").toString();
-    QString runState = data.value("runState").toString();
+    return static_cast<quint8>(ba[offset]) |
+           (static_cast<quint8>(ba[offset + 1]) << 8);
+}
 
-    if (runStateText == QString::fromUtf8("\350\277\207\350\241\214\344\270\255")) {
-        m_runStateLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: green;");
-    } else if (runStateText == QString::fromUtf8("\345\201\234\346\255\214")) {
-        m_runStateLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: red;");
-    } else {
-        m_runStateLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: orange;");
+static float readFloatVal(const QByteArray& ba, int offset)
+{
+    float f;
+    std::memcpy(&f, ba.constData() + offset, sizeof(f));
+    return f;
+}
+
+void RealtimeWidget::setLabelOK(QLabel* label, const QString& text)
+{
+    label->setText(text);
+    label->setStyleSheet("");
+}
+
+void RealtimeWidget::setLabelError(QLabel* label, const QString& err)
+{
+    label->setText(err);
+    label->setStyleSheet("color: red;");
+}
+
+void RealtimeWidget::resetLabel(QLabel* label)
+{
+    label->setText("--");
+    label->setStyleSheet("");
+}
+
+// ========== UI Setup ==========
+
+static QGroupBox* makeCoordCard(const QString& title, QLabel* labels[3])
+{
+    auto* card = new QGroupBox(title);
+    auto* layout = new QFormLayout;
+    const char* axisNames[] = {"X:", "Y:", "Z:"};
+    for (int i = 0; i < 3; ++i) {
+        labels[i] = makeValueLabel();
+        layout->addRow(axisNames[i], labels[i]);
     }
-    m_runStateLabel->setText(runStateText);
-
-    QString mode = data.value("mode").toString();
-    m_modeLabel->setText(QString::fromUtf8("\346\250\241\345\274\217: %1").arg(mode));
-
-    int feed = data.value("feed").toInt();
-    m_feedLabel->setText(QString::fromUtf8("\350\277\207\347\273\203: %1%").arg(feed));
-
-    int spindle = data.value("spindle").toInt();
-    m_spindleLabel->setText(QString::fromUtf8("\344\270\273\350\275\257: %1 RPM").arg(spindle));
-
-    int tool = data.value("tool").toInt();
-    m_toolLabel->setText(QString::fromUtf8("\345\210\266\345\217\267: T%1").arg(tool));
+    card->setLayout(layout);
+    return card;
 }
 
-void RealtimeWidget::updateCoordinates(const QMap<QString, QVariant> &data)
+void RealtimeWidget::setupUI()
 {
-    double mx = data.value("mx").toDouble();
-    double my = data.value("my").toDouble();
-    double mz = data.value("mz").toDouble();
-    m_mxLabel->setText(QString("X: %1").arg(mx, 0, 'f', 3));
-    m_myLabel->setText(QString("Y: %1").arg(my, 0, 'f', 3));
-    m_mzLabel->setText(QString("Z: %1").arg(mz, 0, 'f', 3));
+    auto* mainLayout = new QVBoxLayout(this);
 
-    double wx = data.value("wx").toDouble();
-    double wy = data.value("wy").toDouble();
-    double wz = data.value("wz").toDouble();
-    m_wxLabel->setText(QString("X: %1").arg(wx, 0, 'f', 3));
-    m_wyLabel->setText(QString("Y: %1").arg(wy, 0, 'f', 3));
-    m_wzLabel->setText(QString("Z: %1").arg(wz, 0, 'f', 3));
+    // === Control bar ===
+    auto* controlBar = new QHBoxLayout;
+    m_autoRefreshCheck = new QCheckBox("自动刷新");
+    m_autoRefreshCheck->setChecked(true);
+
+    controlBar->addWidget(m_autoRefreshCheck);
+
+    controlBar->addWidget(new QLabel("间隔:"));
+    m_intervalCombo = new QComboBox;
+    m_intervalCombo->addItem("2 秒", 2);
+    m_intervalCombo->addItem("5 秒", 5);
+    m_intervalCombo->addItem("10 秒", 10);
+    m_intervalCombo->addItem("30 秒", 30);
+    m_intervalCombo->addItem("60 秒", 60);
+    m_intervalCombo->setCurrentIndex(1); // default 5s
+    controlBar->addWidget(m_intervalCombo);
+
+    m_manualRefreshBtn = new QPushButton("手动刷新");
+    m_manualRefreshBtn->setFixedWidth(80);
+    controlBar->addWidget(m_manualRefreshBtn);
+    controlBar->addStretch();
+
+    mainLayout->addLayout(controlBar);
+
+    // === Scroll area for cards ===
+    auto* scrollArea = new QScrollArea;
+    scrollArea->setWidgetResizable(true);
+    auto* scrollWidget = new QWidget;
+    auto* grid = new QGridLayout(scrollWidget);
+
+    // Row 0: 设备状态 | 进给 | 主轴
+    m_deviceCard = new QGroupBox("设备状态");
+    {
+        auto* l = new QFormLayout;
+        m_runModeLabel = makeValueLabel();
+        m_runStatusLabel = makeValueLabel();
+        m_pauseLabel = makeValueLabel();
+        l->addRow("运行模式:", m_runModeLabel);
+        l->addRow("运行状态:", m_runStatusLabel);
+        l->addRow("暂停状态:", m_pauseLabel);
+        m_deviceCard->setLayout(l);
+    }
+
+    m_feedCard = new QGroupBox("进给");
+    {
+        auto* l = new QFormLayout;
+        m_feedProgLabel = makeValueLabel();
+        m_feedActualLabel = makeValueLabel();
+        m_feedOverrideLabel = makeValueLabel();
+        l->addRow("编程速度:", m_feedProgLabel);
+        l->addRow("实际速度:", m_feedActualLabel);
+        l->addRow("进给倍率:", m_feedOverrideLabel);
+        m_feedCard->setLayout(l);
+    }
+
+    m_spindleCard = new QGroupBox("主轴");
+    {
+        auto* l = new QFormLayout;
+        m_spindleProgLabel = makeValueLabel();
+        m_spindleActualLabel = makeValueLabel();
+        m_spindleOverrideLabel = makeValueLabel();
+        l->addRow("编程速度:", m_spindleProgLabel);
+        l->addRow("实际速度:", m_spindleActualLabel);
+        l->addRow("主轴倍率:", m_spindleOverrideLabel);
+        m_spindleCard->setLayout(l);
+    }
+
+    // Row 1: 其他倍率 | 加工信息 | 程序信息
+    m_overrideCard = new QGroupBox("其他倍率");
+    {
+        auto* l = new QFormLayout;
+        m_rapidOverrideLabel = makeValueLabel();
+        m_manualOverrideLabel = makeValueLabel();
+        m_handwheelOverrideLabel = makeValueLabel();
+        l->addRow("快速倍率:", m_rapidOverrideLabel);
+        l->addRow("手动倍率:", m_manualOverrideLabel);
+        l->addRow("手轮倍率:", m_handwheelOverrideLabel);
+        m_overrideCard->setLayout(l);
+    }
+
+    m_machiningCard = new QGroupBox("加工信息");
+    {
+        auto* l = new QFormLayout;
+        m_pieceCountLabel = makeValueLabel();
+        m_runTimeLabel = makeValueLabel();
+        m_cutTimeLabel = makeValueLabel();
+        m_toolNoLabel = makeValueLabel();
+        l->addRow("加工件数:", m_pieceCountLabel);
+        l->addRow("运行时间:", m_runTimeLabel);
+        l->addRow("切削时间:", m_cutTimeLabel);
+        l->addRow("当前刀号:", m_toolNoLabel);
+        m_machiningCard->setLayout(l);
+    }
+
+    m_programCard = new QGroupBox("程序信息");
+    {
+        auto* l = new QFormLayout;
+        m_programNameLabel = makeValueLabel();
+        m_segmentLabel = makeValueLabel();
+        m_execLineLabel = makeValueLabel();
+        l->addRow("程序名:", m_programNameLabel);
+        l->addRow("当前段号:", m_segmentLabel);
+        l->addRow("执行行号:", m_execLineLabel);
+        m_programCard->setLayout(l);
+    }
+
+    // Row 2: 机械坐标 | 绝对坐标 | 相对坐标
+    m_machineCoordCard = makeCoordCard("机械坐标", m_machineCoord);
+    m_absCoordCard     = makeCoordCard("绝对坐标", m_absCoord);
+    m_relCoordCard     = makeCoordCard("相对坐标", m_relCoord);
+
+    // Row 3: 余移动量 | 模态信息 | 当前报警
+    m_remainCoordCard = makeCoordCard("余移动量", m_remainCoord);
+
+    m_modalCard = new QGroupBox("模态信息");
+    {
+        auto* l = new QFormLayout;
+        m_gModalLabel = makeValueLabel();
+        m_mModalLabel = makeValueLabel();
+        l->addRow("G模态:", m_gModalLabel);
+        l->addRow("M模态:", m_mModalLabel);
+        m_modalCard->setLayout(l);
+    }
+
+    m_alarmCard = new QGroupBox("当前报警");
+    {
+        auto* l = new QFormLayout;
+        m_errorCountLabel = makeValueLabel();
+        m_warnCountLabel = makeValueLabel();
+        l->addRow("错误数:", m_errorCountLabel);
+        l->addRow("警告数:", m_warnCountLabel);
+        m_alarmCard->setLayout(l);
+    }
+
+    grid->addWidget(m_deviceCard,      0, 0);
+    grid->addWidget(m_feedCard,        0, 1);
+    grid->addWidget(m_spindleCard,     0, 2);
+    grid->addWidget(m_overrideCard,    1, 0);
+    grid->addWidget(m_machiningCard,   1, 1);
+    grid->addWidget(m_programCard,     1, 2);
+    grid->addWidget(m_machineCoordCard,2, 0);
+    grid->addWidget(m_absCoordCard,    2, 1);
+    grid->addWidget(m_relCoordCard,    2, 2);
+    grid->addWidget(m_remainCoordCard, 3, 0);
+    grid->addWidget(m_modalCard,       3, 1);
+    grid->addWidget(m_alarmCard,       3, 2);
+
+    scrollArea->setWidget(scrollWidget);
+
+    // HEX display
+    m_hexDisplay = new QTextEdit;
+    m_hexDisplay->setReadOnly(true);
+    m_hexDisplay->setFontFamily("Consolas");
+    m_hexDisplay->setMaximumHeight(100);
+    m_hexDisplay->setStyleSheet("QTextEdit { font-size: 11px; background: #1e1e1e; color: #d4d4d4; }");
+
+    mainLayout->addWidget(scrollArea, 3);
+    mainLayout->addWidget(m_hexDisplay, 1);
 }
 
-void RealtimeWidget::updateAlarms(const QMap<QString, QVariant> &data)
-{
-    int count = data.value("count").toInt();
-    m_alarmCountLabel->setText(QString::fromUtf8("\345\205\263 %1 \346\235\241\346\212\245\350\256\260").arg(count));
+// ========== Cycle Polling ==========
 
-    if (count == 0) {
-        m_alarmDetailLabel->setText(QString::fromUtf8("\346\227\240\346\212\245\350\256\260"));
-        m_alarmDetailLabel->setStyleSheet("color: green;");
-    } else {
-        QStringList alarms;
-        for (int i = 0; i < count; ++i) {
-            QString alarmText = data.value(QString("alarm%1").arg(i)).toString();
-            if (!alarmText.isEmpty()) {
-                alarms.append(alarmText);
+void RealtimeWidget::startCycle()
+{
+    if (m_cycleActive) return; // already cycling
+    m_cycleActive = true;
+    m_pollIndex = 0;
+    const auto& item = pollItems[0];
+    emit pollRequest(item.cmdCode, item.params);
+}
+
+// ========== Update Routing ==========
+
+static QString runModeStr(quint32 v)
+{
+    switch (v) {
+    case 0: return "手动";
+    case 1: return "自动";
+    case 2: return "MDI";
+    default: return QString::number(v);
+    }
+}
+
+static QString runStatusStr(quint32 v)
+{
+    switch (v) {
+    case 0: return "停止";
+    case 1: return "运行中";
+    case 2: return "暂停";
+    default: return QString::number(v);
+    }
+}
+
+void RealtimeWidget::updateData(const ParsedResponse& resp)
+{
+    // Advance cycle if active
+    if (m_cycleActive) {
+        m_pollIndex++;
+        if (m_pollIndex >= m_pollCount) {
+            // Cycle complete
+            m_cycleActive = false;
+            // Schedule next cycle if auto-refresh
+            if (m_autoRefreshCheck->isChecked()) {
+                int secs = m_intervalCombo->currentData().toInt();
+                m_cycleDelayTimer->start(secs * 1000);
             }
-        }
-        m_alarmDetailLabel->setText(alarms.join("\n"));
-        m_alarmDetailLabel->setStyleSheet("color: red;");
-    }
-}
-
-void RealtimeWidget::appendRawData(const QByteArray &hex)
-{
-    QString display = hexToDisplay(hex);
-    m_rawDataEdit->append(display);
-
-    // Limit to 100 lines
-    QTextCursor cursor = m_rawDataEdit->textCursor();
-    cursor.movePosition(QTextCursor::Start);
-    int lineCount = 0;
-    while (!cursor.atEnd()) {
-        cursor.movePosition(QTextCursor::Down, QTextCursor::KeepAnchor);
-        lineCount++;
-    }
-    while (lineCount > 100) {
-        cursor.movePosition(QTextCursor::Start);
-        cursor.select(QTextCursor::LineUnderCursor);
-        cursor.removeSelectedText();
-        cursor.deleteChar();
-        lineCount--;
-    }
-}
-
-QString RealtimeWidget::hexToDisplay(const QByteArray &data)
-{
-    QString result;
-    for (int i = 0; i < data.size(); ++i) {
-        result += QString::number((unsigned char)data[i], 16).rightJustified(2, '0').toUpper();
-        if ((i + 1) % 16 == 0) {
-            result += "\n";
-        } else if ((i + 1) % 8 == 0) {
-            result += "  ";
         } else {
-            result += " ";
+            // Send next item in cycle
+            const auto& item = pollItems[m_pollIndex];
+            emit pollRequest(item.cmdCode, item.params);
         }
     }
-    return result;
+
+    switch (resp.cmdCode) {
+    case 0x10: case 0x11: case 0x22:
+        updateDeviceCard(resp); break;
+    case 0x1A:
+        updateSpeedCard(resp); break;
+    case 0x15:
+        updateCoordCard(resp); break;
+    case 0x16: case 0x17: case 0x18: case 0x19:
+        updateMachiningCard(resp); break;
+    case 0x12: case 0x1D: case 0x23:
+    case 0x1B: case 0x1C:
+        updateProgramCard(resp); break;
+    case 0x81:
+        updateAlarmCard(resp); break;
+    default: break;
+    }
 }
 
-void RealtimeWidget::clear()
+// ========== Device Card ==========
+
+void RealtimeWidget::updateDeviceCard(const ParsedResponse& resp)
 {
-    m_runStateLabel->setText(QString::fromUtf8("\20181"));
-    m_modeLabel->setText(QString::fromUtf8("\346\250\241\345\274\217: \20181"));
-    m_feedLabel->setText(QString::fromUtf8("\350\277\207\347\273\203: \20181%"));
-    m_spindleLabel->setText(QString::fromUtf8("\344\270\273\350\275\257: \20181 RPM"));
-    m_toolLabel->setText(QString::fromUtf8("\345\210\266\345\217\267: T\20181"));
-    m_mxLabel->setText("X: \20181");
-    m_myLabel->setText("Y: \20181");
-    m_mzLabel->setText("Z: \20181");
-    m_wxLabel->setText("X: \20181");
-    m_wyLabel->setText("Y: \20181");
-    m_wzLabel->setText("Z: \20181");
-    m_alarmCountLabel->setText(QString::fromUtf8("\345\205\263 \20181 \346\235\241\346\212\245\350\256\260"));
-    m_alarmDetailLabel->setText(QString::fromUtf8("\346\227\240\346\212\245\350\256\260"));
-    m_rawDataEdit->clear();
+    if (!resp.isValid) {
+        switch (resp.cmdCode) {
+        case 0x10: setLabelError(m_runModeLabel, resp.errorString); break;
+        case 0x11: setLabelError(m_runStatusLabel, resp.errorString); break;
+        case 0x22: setLabelError(m_pauseLabel, resp.errorString); break;
+        }
+        return;
+    }
+    switch (resp.cmdCode) {
+    case 0x10:
+        if (resp.rawData.size() >= 4)
+            setLabelOK(m_runModeLabel, runModeStr(readLE32(resp.rawData, 0)));
+        break;
+    case 0x11:
+        if (resp.rawData.size() >= 4)
+            setLabelOK(m_runStatusLabel, runStatusStr(readLE32(resp.rawData, 0)));
+        break;
+    case 0x22:
+        if (resp.rawData.size() >= 4) {
+            quint32 v = readLE32(resp.rawData, 0);
+            setLabelOK(m_pauseLabel, v == 0 ? "否" : QString("是 (%1)").arg(v));
+        }
+        break;
+    }
+}
+
+// ========== Speed Card (0x1A) ==========
+
+void RealtimeWidget::updateSpeedCard(const ParsedResponse& resp)
+{
+    int prevIdx = m_pollIndex > 0 ? m_pollIndex - 1 : m_pollCount - 1;
+
+    QLabel* target = nullptr;
+    QString unit;
+    bool isPercent = false;
+
+    switch (prevIdx) {
+    case PI_FEED_PROG:      target = m_feedProgLabel;      unit = " mm/min"; break;
+    case PI_FEED_ACTUAL:    target = m_feedActualLabel;    unit = " mm/min"; break;
+    case PI_FEED_OVERRIDE:  target = m_feedOverrideLabel;  isPercent = true; break;
+    case PI_SPINDLE_PROG:   target = m_spindleProgLabel;   unit = " RPM"; break;
+    case PI_SPINDLE_ACTUAL: target = m_spindleActualLabel; unit = " RPM"; break;
+    case PI_SPINDLE_OVERRIDE: target = m_spindleOverrideLabel; isPercent = true; break;
+    case PI_RAPID_OVERRIDE:   target = m_rapidOverrideLabel;   isPercent = true; break;
+    case PI_MANUAL_OVERRIDE:  target = m_manualOverrideLabel;  isPercent = true; break;
+    case PI_HANDWHEEL_OVERRIDE: target = m_handwheelOverrideLabel; isPercent = true; break;
+    default: return;
+    }
+
+    if (!resp.isValid) {
+        setLabelError(target, resp.errorString);
+        return;
+    }
+
+    if (resp.rawData.size() >= 4) {
+        float val = readFloatVal(resp.rawData, 0);
+        if (isPercent)
+            setLabelOK(target, QString::number(val, 'f', 1) + "%");
+        else
+            setLabelOK(target, QString::number(qRound(val)) + unit);
+    }
+}
+
+// ========== Coordinate Card (0x15) ==========
+
+void RealtimeWidget::updateCoordCard(const ParsedResponse& resp)
+{
+    int prevIdx = m_pollIndex > 0 ? m_pollIndex - 1 : m_pollCount - 1;
+
+    QLabel** targetLabels = nullptr;
+    switch (prevIdx) {
+    case PI_COORD_MACHINE: targetLabels = m_machineCoord; break;
+    case PI_COORD_ABS:     targetLabels = m_absCoord;     break;
+    case PI_COORD_REL:     targetLabels = m_relCoord;     break;
+    case PI_COORD_REMAIN:  targetLabels = m_remainCoord;  break;
+    default: return;
+    }
+
+    if (!resp.isValid) {
+        setLabelError(targetLabels[0], resp.errorString);
+        resetLabel(targetLabels[1]);
+        resetLabel(targetLabels[2]);
+        return;
+    }
+
+    if (resp.rawData.size() < 2) return;
+
+    quint16 count = readLE16(resp.rawData, 0);
+    int offset = 2;
+    for (int i = 0; i < count && i < 3 && offset + 4 <= resp.rawData.size(); ++i) {
+        float val = readFloatVal(resp.rawData, offset);
+        setLabelOK(targetLabels[i], QString::number(val, 'f', 3));
+        offset += 4;
+    }
+}
+
+// ========== Machining Card ==========
+
+void RealtimeWidget::updateMachiningCard(const ParsedResponse& resp)
+{
+    if (!resp.isValid) {
+        switch (resp.cmdCode) {
+        case 0x16: setLabelError(m_pieceCountLabel, resp.errorString); break;
+        case 0x17: setLabelError(m_toolNoLabel, resp.errorString); break;
+        case 0x18: setLabelError(m_runTimeLabel, resp.errorString); break;
+        case 0x19: setLabelError(m_cutTimeLabel, resp.errorString); break;
+        }
+        return;
+    }
+    switch (resp.cmdCode) {
+    case 0x16:
+        if (resp.rawData.size() >= 4)
+            setLabelOK(m_pieceCountLabel, QString::number(readLE32(resp.rawData, 0)));
+        break;
+    case 0x17:
+        if (resp.rawData.size() >= 4) {
+            quint16 tool = readLE16(resp.rawData, 0);
+            quint16 comp = readLE16(resp.rawData, 2);
+            setLabelOK(m_toolNoLabel, QString("刀号:%1 刀补:%2").arg(tool).arg(comp));
+        }
+        break;
+    case 0x18:
+        if (resp.rawData.size() >= 4) {
+            quint32 s = readLE32(resp.rawData, 0);
+            setLabelOK(m_runTimeLabel, QString("%1h %2m %3s").arg(s/3600).arg((s%3600)/60).arg(s%60));
+        }
+        break;
+    case 0x19:
+        if (resp.rawData.size() >= 4) {
+            quint32 s = readLE32(resp.rawData, 0);
+            setLabelOK(m_cutTimeLabel, QString("%1h %2m %3s").arg(s/3600).arg((s%3600)/60).arg(s%60));
+        }
+        break;
+    }
+}
+
+// ========== Program Card ==========
+
+void RealtimeWidget::updateProgramCard(const ParsedResponse& resp)
+{
+    if (!resp.isValid) {
+        switch (resp.cmdCode) {
+        case 0x12: setLabelError(m_programNameLabel, resp.errorString); break;
+        case 0x1D: setLabelError(m_segmentLabel, resp.errorString); break;
+        case 0x23: setLabelError(m_execLineLabel, resp.errorString); break;
+        case 0x1B: setLabelError(m_gModalLabel, resp.errorString); break;
+        case 0x1C: setLabelError(m_mModalLabel, resp.errorString); break;
+        }
+        return;
+    }
+    switch (resp.cmdCode) {
+    case 0x12:
+        if (resp.rawData.size() >= 2) {
+            quint16 nameLen = readLE16(resp.rawData, 0);
+            if (resp.rawData.size() >= 2 + nameLen)
+                setLabelOK(m_programNameLabel, QString::fromUtf8(resp.rawData.mid(2, nameLen)));
+        }
+        break;
+    case 0x1D:
+        if (resp.rawData.size() >= 4)
+            setLabelOK(m_segmentLabel, "N" + QString::number(readLE32(resp.rawData, 0)));
+        break;
+    case 0x23:
+        if (resp.rawData.size() >= 4)
+            setLabelOK(m_execLineLabel, QString::number(readLE32(resp.rawData, 0)));
+        break;
+    case 0x1B:
+        if (resp.rawData.size() >= 2) {
+            quint16 count = readLE16(resp.rawData, 0);
+            QStringList vals;
+            int off = 2;
+            for (quint16 i = 0; i < count && off + 2 <= resp.rawData.size(); ++i) {
+                vals << "G" + QString::number(readLE16(resp.rawData, off));
+                off += 2;
+            }
+            setLabelOK(m_gModalLabel, vals.isEmpty() ? "无" : vals.join(" "));
+        }
+        break;
+    case 0x1C:
+        if (resp.rawData.size() >= 2) {
+            quint16 count = readLE16(resp.rawData, 0);
+            QStringList vals;
+            int off = 2;
+            for (quint16 i = 0; i < count && off + 2 <= resp.rawData.size(); ++i) {
+                vals << "M" + QString::number(readLE16(resp.rawData, off));
+                off += 2;
+            }
+            setLabelOK(m_mModalLabel, vals.isEmpty() ? "无" : vals.join(" "));
+        }
+        break;
+    }
+}
+
+// ========== Alarm Card ==========
+
+void RealtimeWidget::updateAlarmCard(const ParsedResponse& resp)
+{
+    if (!resp.isValid || resp.cmdCode != 0x81) {
+        if (resp.cmdCode == 0x81 && !resp.isValid) {
+            setLabelError(m_errorCountLabel, resp.errorString);
+            resetLabel(m_warnCountLabel);
+        }
+        return;
+    }
+    if (resp.rawData.size() < 4) return;
+
+    setLabelOK(m_errorCountLabel, QString::number(readLE16(resp.rawData, 0)));
+    setLabelOK(m_warnCountLabel, QString::number(readLE16(resp.rawData, 2)));
+}
+
+// ========== HEX Display ==========
+
+void RealtimeWidget::appendHexDisplay(const QByteArray& data, bool isSend)
+{
+    QStringList hex;
+    for (int i = 0; i < data.size(); ++i)
+        hex << QString("%1").arg(static_cast<quint8>(data[i]), 2, 16, QChar('0')).toUpper();
+
+    QString prefix = isSend ? "[TX]" : "[RX]";
+    m_hexDisplay->append(QString("%1 %2").arg(prefix, hex.join(" ")));
+}
+
+// ========== Polling Control ==========
+
+void RealtimeWidget::startPolling()
+{
+    m_pollIndex = 0;
+    m_cycleActive = false;
+    m_cycleDelayTimer->stop();
+    // Start first cycle immediately
+    startCycle();
+}
+
+void RealtimeWidget::stopPolling()
+{
+    m_cycleDelayTimer->stop();
+    m_cycleActive = false;
+}
+
+// ========== Clear Data ==========
+
+void RealtimeWidget::clearData()
+{
+    resetLabel(m_runModeLabel);
+    resetLabel(m_runStatusLabel);
+    resetLabel(m_pauseLabel);
+    resetLabel(m_feedProgLabel);
+    resetLabel(m_feedActualLabel);
+    resetLabel(m_feedOverrideLabel);
+    resetLabel(m_spindleProgLabel);
+    resetLabel(m_spindleActualLabel);
+    resetLabel(m_spindleOverrideLabel);
+    resetLabel(m_rapidOverrideLabel);
+    resetLabel(m_manualOverrideLabel);
+    resetLabel(m_handwheelOverrideLabel);
+    for (int i = 0; i < 3; ++i) {
+        resetLabel(m_machineCoord[i]);
+        resetLabel(m_absCoord[i]);
+        resetLabel(m_relCoord[i]);
+        resetLabel(m_remainCoord[i]);
+    }
+    resetLabel(m_pieceCountLabel);
+    resetLabel(m_runTimeLabel);
+    resetLabel(m_cutTimeLabel);
+    resetLabel(m_toolNoLabel);
+    resetLabel(m_programNameLabel);
+    resetLabel(m_segmentLabel);
+    resetLabel(m_execLineLabel);
+    resetLabel(m_gModalLabel);
+    resetLabel(m_mModalLabel);
+    resetLabel(m_errorCountLabel);
+    resetLabel(m_warnCountLabel);
+    m_hexDisplay->clear();
 }

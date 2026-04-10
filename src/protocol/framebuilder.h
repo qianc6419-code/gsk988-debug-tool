@@ -2,17 +2,26 @@
 #define FRAMEBUILDER_H
 
 #include <QByteArray>
+
 class FrameBuilder
 {
 public:
-    static QByteArray buildFrame(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data);
-    static bool parseFrame(const QByteArray &frame, quint8 &outCmd, quint8 &outSub,
-                         quint8 &outType, QByteArray &outData, QString &error);
-    static quint8 calculateXor(const QByteArray &data);
-    static bool isValidFrameHeader(const QByteArray &frame);
-    static quint16 getFrameLength(const QByteArray &frame);
-private:
-    static const quint8 FRAME_HEADER_HIGH = 0x5A;
-    static const quint8 FRAME_HEADER_LOW = 0xA5;
+    // Build a request frame with the given data field
+    static QByteArray buildRequestFrame(const QByteArray& dataField);
+    // Build a response frame with the given data field
+    static QByteArray buildResponseFrame(const QByteArray& dataField);
+    // Extract one complete frame from the receive buffer
+    static QByteArray extractFrame(QByteArray& buffer);
+    // Validate frame integrity (head, tail, length consistency)
+    static bool validateFrame(const QByteArray& frame);
+
+    static constexpr quint8 FRAME_HEAD_0 = 0x93;
+    static constexpr quint8 FRAME_HEAD_1 = 0x00;
+    static constexpr quint8 FRAME_TAIL_0 = 0x55;
+    static constexpr quint8 FRAME_TAIL_1 = 0xAA;
+
+    static const QByteArray REQUEST_ID;
+    static const QByteArray RESPONSE_ID;
 };
-#endif
+
+#endif // FRAMEBUILDER_H

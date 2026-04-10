@@ -1,80 +1,82 @@
 #include "tcpclient.h"
-#include <QTimer>
+#include "protocol/framebuilder.h"
 
-TcpClient::TcpClient(QObject *parent)
+TcpClient::TcpClient(QObject* parent)
     : QObject(parent)
-    , m_socket(nullptr)
-    , m_waitTimer(nullptr)
-    , m_timeout(5000)
+    , m_socket(new QTcpSocket(this))
+    , m_timeoutTimer(new QTimer(this))
 {
-    m_socket = new QTcpSocket(this);
-    m_waitTimer = new QTimer(this);
-    m_waitTimer->setSingleShot(true);
+    m_timeoutTimer->setSingleShot(true);
+    m_timeoutTimer->setInterval(3000);
+
+    connect(m_socket, &QTcpSocket::connected, this, [this]() {
+        emit connected();
+    });
+
+    connect(m_socket, &QTcpSocket::disconnected, this, [this]() {
+        m_timeoutTimer->stop();
+        m_buffer.clear();
+        m_pendingFrame.clear();
+        emit disconnected();
+    });
+
+    using ErrorSignal = void (QTcpSocket::*)(QAbstractSocket::SocketError);
+    connect(m_socket, static_cast<ErrorSignal>(&QTcpSocket::errorOccurred), this,
+            [this](QAbstractSocket::SocketError) {
+        emit connectionError(m_socket->errorString());
+    });
 
     connect(m_socket, &QTcpSocket::readyRead, this, &TcpClient::onReadyRead);
-    connect(m_socket, &QTcpSocket::disconnected, this, &TcpClient::onDisconnected);
-    connect(m_socket, QOverload<QAbstractSocket::SocketError>::of(&QTcpSocket::error),
-            this, &TcpClient::onError);
-    connect(m_waitTimer, &QTimer::timeout, this, &TcpClient::onWaitTimeout);
+    connect(m_timeoutTimer, &QTimer::timeout, this, &TcpClient::onTimeout);
 }
 
 TcpClient::~TcpClient()
 {
-    disconnect();
+    if (m_socket->state() != QAbstractSocket::UnconnectedState)
+        m_socket->abort();
 }
 
-bool TcpClient::connectTo(const QString &host, quint16 port)
+void TcpClient::connectTo(const QString& ip, quint16 port)
 {
-    if (isConnected()) {
-        disconnect();
-    }
-    m_socket->connectToHost(host, port);
-    if (m_socket->waitForConnected(m_timeout)) {
-        emit connected();
-        return true;
-    } else {
-        emit connectionError(m_socket->errorString());
-        return false;
-    }
+    m_buffer.clear();
+    m_pendingFrame.clear();
+    m_socket->connectToHost(ip, port);
 }
 
 void TcpClient::disconnect()
 {
-    if (m_socket) {
-        m_socket->disconnectFromHost();
-    }
+    m_timeoutTimer->stop();
+    m_socket->disconnectFromHost();
 }
 
-void TcpClient::sendFrame(const QByteArray &frame)
+bool TcpClient::isConnected() const
 {
-    if (!isConnected()) {
-        emit connectionError("未连接");
+    return m_socket->state() == QAbstractSocket::ConnectedState;
+}
+
+void TcpClient::sendFrame(const QByteArray& frame)
+{
+    if (!isConnected())
         return;
-    }
+
+    m_pendingFrame = frame;
     m_socket->write(frame);
-    m_socket->flush();
-    m_waitTimer->start(m_timeout);
+    m_timeoutTimer->start();
 }
 
 void TcpClient::onReadyRead()
 {
-    m_waitTimer->stop();
-    QByteArray data = m_socket->readAll();
-    emit readyRead(data);
+    m_buffer.append(m_socket->readAll());
+
+    // Extract all complete frames
+    QByteArray frame;
+    while (!(frame = FrameBuilder::extractFrame(m_buffer)).isEmpty()) {
+        m_timeoutTimer->stop();
+        emit responseReceived(frame);
+    }
 }
 
-void TcpClient::onDisconnected()
+void TcpClient::onTimeout()
 {
-    emit disconnected();
-}
-
-void TcpClient::onError(QAbstractSocket::SocketError error)
-{
-    Q_UNUSED(error);
-    emit connectionError(m_socket->errorString());
-}
-
-void TcpClient::onWaitTimeout()
-{
-    emit timeout();
+    emit responseTimeout();
 }

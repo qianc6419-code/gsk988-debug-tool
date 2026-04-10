@@ -1,133 +1,121 @@
 #include "framebuilder.h"
-#include "../protocol/crc16.h"
-#include <QDataStream>
 
-QByteArray FrameBuilder::buildFrame(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data)
+const QByteArray FrameBuilder::REQUEST_ID  = QByteArray::fromHex("6fc81e641e171017");
+const QByteArray FrameBuilder::RESPONSE_ID = QByteArray::fromHex("00641ec81e171001");
+
+QByteArray FrameBuilder::buildRequestFrame(const QByteArray& dataField)
 {
-    quint16 length = 6 + data.size();
+    // Length = REQUEST_ID(8) + dataField
+    quint16 len = static_cast<quint16>(REQUEST_ID.size() + dataField.size());
 
     QByteArray frame;
-    QDataStream stream(&frame, QIODevice::WriteOnly);
-    stream.setByteOrder(QDataStream::LittleEndian);
+    frame.reserve(2 + 2 + len + 2);
 
-    // Header
-    stream << FRAME_HEADER_HIGH;
-    stream << FRAME_HEADER_LOW;
+    // Head
+    frame.append(FRAME_HEAD_0);
+    frame.append(FRAME_HEAD_1);
 
-    // Length
-    stream << length;
+    // Length (little-endian)
+    frame.append(static_cast<char>(len & 0xFF));
+    frame.append(static_cast<char>((len >> 8) & 0xFF));
 
-    // CMD, SUB, Type
-    stream << cmd;
-    stream << sub;
-    stream << type;
+    // Identifier + data field
+    frame.append(REQUEST_ID);
+    frame.append(dataField);
 
-    // Data
-    frame.append(data);
-
-    // Calculate XOR over CMD+SUB+Type+Data
-    QByteArray xorData;
-    xorData.append(cmd);
-    xorData.append(sub);
-    xorData.append(type);
-    xorData.append(data);
-    quint8 xorByte = calculateXor(xorData);
-    frame.append(xorByte);
-
-    // Calculate CRC16 over entire frame (before CRC is appended)
-    quint16 crc = Crc16::calculate(frame);
-
-    // Append CRC16 (2 bytes, LittleEndian)
-    stream << crc;
+    // Tail
+    frame.append(FRAME_TAIL_0);
+    frame.append(FRAME_TAIL_1);
 
     return frame;
 }
 
-bool FrameBuilder::parseFrame(const QByteArray &frame, quint8 &outCmd, quint8 &outSub,
-                              quint8 &outType, QByteArray &outData, QString &error)
+QByteArray FrameBuilder::buildResponseFrame(const QByteArray& dataField)
 {
-    // Minimum frame size: header(2) + length(2) + CMD(1) + SUB(1) + Type(1) + XOR(1) + CRC16(2) = 10
-    if (frame.size() < 10) {
-        error = "Frame too short";
-        return false;
+    quint16 len = static_cast<quint16>(RESPONSE_ID.size() + dataField.size());
+
+    QByteArray frame;
+    frame.reserve(2 + 2 + len + 2);
+
+    frame.append(FRAME_HEAD_0);
+    frame.append(FRAME_HEAD_1);
+
+    frame.append(static_cast<char>(len & 0xFF));
+    frame.append(static_cast<char>((len >> 8) & 0xFF));
+
+    frame.append(RESPONSE_ID);
+    frame.append(dataField);
+
+    frame.append(FRAME_TAIL_0);
+    frame.append(FRAME_TAIL_1);
+
+    return frame;
+}
+
+QByteArray FrameBuilder::extractFrame(QByteArray& buffer)
+{
+    // Find frame head 0x93 0x00
+    int headPos = -1;
+    for (int i = 0; i <= buffer.size() - 2; ++i) {
+        if (static_cast<quint8>(buffer[i]) == FRAME_HEAD_0 &&
+            static_cast<quint8>(buffer[i + 1]) == FRAME_HEAD_1) {
+            headPos = i;
+            break;
+        }
     }
 
-    // Validate header
-    if (!isValidFrameHeader(frame)) {
-        error = "Invalid frame header";
-        return false;
+    if (headPos < 0)
+        return QByteArray();
+
+    // Discard garbage before head
+    if (headPos > 0)
+        buffer.remove(0, headPos);
+
+    // Need at least head(2) + length(2) = 4 bytes
+    if (buffer.size() < 4)
+        return QByteArray();
+
+    // Read length (little-endian), bytes at index 2 and 3
+    quint16 len = static_cast<quint8>(buffer[2]) |
+                  (static_cast<quint8>(buffer[3]) << 8);
+
+    // Complete frame = head(2) + length(2) + len bytes + tail(2) = 6 + len
+    int totalFrameSize = 6 + len;
+
+    if (buffer.size() < totalFrameSize)
+        return QByteArray();
+
+    // Verify tail
+    if (static_cast<quint8>(buffer[totalFrameSize - 2]) != FRAME_TAIL_0 ||
+        static_cast<quint8>(buffer[totalFrameSize - 1]) != FRAME_TAIL_1) {
+        // Invalid tail — discard this head and search for next
+        buffer.remove(0, 2);
+        return extractFrame(buffer);
     }
 
-    // Read length
-    quint16 length = getFrameLength(frame);
-    if (frame.size() < length) {
-        error = "Frame length mismatch";
+    QByteArray frame = buffer.left(totalFrameSize);
+    buffer.remove(0, totalFrameSize);
+    return frame;
+}
+
+bool FrameBuilder::validateFrame(const QByteArray& frame)
+{
+    if (frame.size() < 6) // minimum: head(2) + length(2) + tail(2)
         return false;
-    }
 
-    // Extract CMD, SUB, Type
-    outCmd = static_cast<quint8>(frame[4]);
-    outSub = static_cast<quint8>(frame[5]);
-    outType = static_cast<quint8>(frame[6]);
-
-    // Extract data (from offset 7 to length-3, since XOR is at length-3 and CRC16 at length-2 and length-1)
-    int dataSize = length - 8; // 6 (header+length+cmd+sub+type) + 1 (xor) + 1 (crc16 part 1) = 8, but actually length includes everything
-    // Actually: header(2) + length(2) + cmd(1) + sub(1) + type(1) + data(n) + xor(1) + crc16(2) = length
-    // So dataSize = length - 2 - 2 - 1 - 1 - 1 - 1 - 2 = length - 10
-    dataSize = length - 10;
-    outData = frame.mid(7, dataSize);
-
-    // Verify XOR
-    quint8 receivedXor = static_cast<quint8>(frame[length - 3]);
-    QByteArray xorData;
-    xorData.append(outCmd);
-    xorData.append(outSub);
-    xorData.append(outType);
-    xorData.append(outData);
-    quint8 calculatedXor = calculateXor(xorData);
-    if (receivedXor != calculatedXor) {
-        error = "XOR checksum mismatch";
+    if (static_cast<quint8>(frame[0]) != FRAME_HEAD_0 ||
+        static_cast<quint8>(frame[1]) != FRAME_HEAD_1)
         return false;
-    }
 
-    // Verify CRC16
-    QByteArray frameForCrc = frame.left(length - 2);
-    quint16 receivedCrc = static_cast<quint16>(frame[length - 2]) | (static_cast<quint16>(static_cast<quint8>(frame[length - 1])) << 8);
-    quint16 calculatedCrc = Crc16::calculate(frameForCrc);
-    if (receivedCrc != calculatedCrc) {
-        error = "CRC16 checksum mismatch";
+    quint16 len = static_cast<quint8>(frame[2]) |
+                  (static_cast<quint8>(frame[3]) << 8);
+
+    if (frame.size() != 6 + len)
         return false;
-    }
+
+    if (static_cast<quint8>(frame[frame.size() - 2]) != FRAME_TAIL_0 ||
+        static_cast<quint8>(frame[frame.size() - 1]) != FRAME_TAIL_1)
+        return false;
 
     return true;
-}
-
-quint8 FrameBuilder::calculateXor(const QByteArray &data)
-{
-    quint8 xorResult = 0;
-    for (int i = 0; i < data.size(); ++i) {
-        xorResult ^= static_cast<quint8>(data[i]);
-    }
-    return xorResult;
-}
-
-bool FrameBuilder::isValidFrameHeader(const QByteArray &frame)
-{
-    if (frame.size() < 2) {
-        return false;
-    }
-    return static_cast<quint8>(frame[0]) == FRAME_HEADER_HIGH &&
-           static_cast<quint8>(frame[1]) == FRAME_HEADER_LOW;
-}
-
-quint16 FrameBuilder::getFrameLength(const QByteArray &frame)
-{
-    if (frame.size() < 4) {
-        return 0;
-    }
-    QDataStream stream(frame);
-    stream.setByteOrder(QDataStream::LittleEndian);
-    quint16 length;
-    stream >> length;
-    return length;
 }

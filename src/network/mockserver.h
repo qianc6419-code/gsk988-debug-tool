@@ -4,40 +4,33 @@
 #include <QObject>
 #include <QTcpServer>
 #include <QTcpSocket>
-#include <QMap>
-#include <QByteArray>
+#include <QList>
+
+class Gsk988Protocol;
 
 class MockServer : public QObject
 {
     Q_OBJECT
 public:
-    explicit MockServer(QObject *parent = nullptr);
+    explicit MockServer(QObject* parent = nullptr);
     ~MockServer();
-    bool start(quint16 port = 8067);
+
+    bool start(quint16 port = 6000);
     void stop();
-    bool isRunning() const { return m_server.isListening(); }
-    void setMockResponse(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data);
-    void resetMockResponse(quint8 cmd, quint8 sub, quint8 type);
-    void resetAllResponses();
+    bool isRunning() const;
+    quint16 serverPort() const;
+
 signals:
-    void clientConnected(const QString &address);
-    void clientDisconnected();
-    void mockDataSent(const QByteArray &data);
-    void mockDataReceived(const QByteArray &data);
-    void serverError(const QString &error);
+    void logMessage(const QString& msg);
+
 private slots:
     void onNewConnection();
     void onClientReadyRead();
-    void onClientDisconnected();
-private:
-    QByteArray generateDefaultResponse(quint8 cmd, quint8 sub, quint8 type);
-    QByteArray buildMockFrame(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data);
-    void initDefaultResponses();
 
-    QTcpServer m_server;
-    QTcpSocket *m_clientSocket;
-    QMap<QString, QByteArray> m_mockResponses;
-    QMap<QString, QByteArray> m_defaultResponses;
-    quint16 m_port;
+private:
+    QTcpServer* m_server;
+    QList<QTcpSocket*> m_clients;
+    Gsk988Protocol* m_protocol;
 };
-#endif
+
+#endif // MOCKSERVER_H

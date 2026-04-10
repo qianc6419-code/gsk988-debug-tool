@@ -1,378 +1,254 @@
 #include "mainwindow.h"
-#include "ui_mainwindow.h"
 #include "network/tcpclient.h"
 #include "network/mockserver.h"
-#include "protocol/framebuilder.h"
 #include "protocol/gsk988protocol.h"
 #include "ui/realtimewidget.h"
-#include "ui/commandtablewidget.h"
-#include "ui/dataparsewidget.h"
+#include "ui/commandwidget.h"
+#include "ui/parsewidget.h"
 #include "ui/logwidget.h"
-#include "ui/paramwidget.h"
 
-#include <QVBoxLayout>
+#include <QToolBar>
 #include <QHBoxLayout>
-#include <QGridLayout>
-#include <QSplitter>
-#include <QGroupBox>
-#include <QRadioButton>
-#include <QSpinBox>
-#include <QLineEdit>
-#include <QPushButton>
-#include <QLabel>
-#include <QTabWidget>
-#include <QDebug>
-#include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QUrlQuery>
+#include <QApplication>
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
-    , m_centralWidget(nullptr)
-    , m_mainSplitter(nullptr)
-    , m_leftPanel(nullptr)
-    , m_tabWidget(nullptr)
-    , m_ipEdit(nullptr)
-    , m_portSpin(nullptr)
-    , m_connectBtn(nullptr)
-    , m_modeGroup(nullptr)
-    , m_realDeviceRadio(nullptr)
-    , m_mockServerRadio(nullptr)
-    , m_connectionStatusLabel(nullptr)
-    , m_btnReadStatus(nullptr)
-    , m_btnReadCoords(nullptr)
-    , m_btnReadAlarms(nullptr)
-    , m_btnReadParams(nullptr)
-    , m_btnReadDeviceInfo(nullptr)
-    , m_btnReadDiagnose(nullptr)
-    , m_tcpClient(nullptr)
-    , m_mockServer(nullptr)
-    , m_realtimeWidget(nullptr)
-    , m_commandWidget(nullptr)
-    , m_parseWidget(nullptr)
-    , m_logWidget(nullptr)
-    , m_paramWidget(nullptr)
-    , m_isConnected(false)
-    , m_isMockMode(true)
+    , m_protocol(new Gsk988Protocol(this))
+    , m_client(new TcpClient(this))
+    , m_mockServer(new MockServer(this))
+    , m_waitingManualResponse(false)
+    , m_needStartPolling(false)
 {
-    // Create network instances
-    m_tcpClient = new TcpClient(this);
-    m_mockServer = new MockServer(this);
+    setWindowTitle("GSK988 以太网调试工具");
+    resize(1100, 700);
+    setMinimumSize(900, 600);
 
-    // Create protocol instance (for parsing)
-    Gsk988Protocol *protocol = new Gsk988Protocol(this);
-
-    // Create UI
-    setupUi();
-
-    // Connect signals
-    // MockServer signals -> logWidget
-    connect(m_mockServer, &MockServer::mockDataSent, this, [this](const QByteArray &data) {
-        m_logWidget->addLog("发送", "", data);
-    });
-    connect(m_mockServer, &MockServer::mockDataReceived, this, [this](const QByteArray &data) {
-        m_logWidget->addLog("接收", "", data);
-    });
-
-    // TcpClient signals
-    connect(m_tcpClient, &TcpClient::readyRead, this, [this, protocol](const QByteArray &data) {
-        // Parse response and update widgets
-        quint8 cmd = 0, sub = 0, type = 0;
-        QByteArray payload;
-        QString error;
-
-        if (FrameBuilder::parseFrame(data, cmd, sub, type, payload, error)) {
-            m_logWidget->addLog("接收", QString("CMD=%1 SUB=%2 TYPE=%3").arg(cmd, 2, 16).arg(sub, 2, 16).arg(type, 2, 16), data);
-
-            QMap<QString, QVariant> result;
-            if (protocol->parseResponse(data, cmd, result)) {
-                if (cmd == 0x02) {
-                    m_realtimeWidget->updateMachineStatus(result);
-                } else if (cmd == 0x03) {
-                    m_realtimeWidget->updateCoordinates(result);
-                } else if (cmd == 0x05) {
-                    m_realtimeWidget->updateAlarms(result);
-                }
-                m_realtimeWidget->appendRawData(data);
-            }
-        } else {
-            qDebug() << "Frame parse error:" << error;
-        }
-    });
-
-    connect(m_tcpClient, &TcpClient::connectionError, this, [](const QString &error) {
-        qDebug() << "Connection error:" << error;
-    });
-
-    connect(m_tcpClient, &TcpClient::timeout, this, []() {
-        qDebug() << "Connection timeout";
-    });
-
-    connect(m_tcpClient, &TcpClient::connected, this, [this]() {
-        m_isConnected = true;
-        updateConnectionStatus();
-    });
-
-    connect(m_tcpClient, &TcpClient::disconnected, this, [this]() {
-        m_isConnected = false;
-        updateConnectionStatus();
-    });
-
-    // Quick buttons
-    connect(m_btnReadStatus, &QPushButton::clicked, this, [this]() {
-        sendCommand(0x02, 0x00, 0x00);
-    });
-    connect(m_btnReadCoords, &QPushButton::clicked, this, [this]() {
-        sendCommand(0x03, 0x00, 0x00);
-    });
-    connect(m_btnReadAlarms, &QPushButton::clicked, this, [this]() {
-        sendCommand(0x05, 0x00, 0x00);
-    });
-    connect(m_btnReadParams, &QPushButton::clicked, this, [this]() {
-        sendCommand(0x06, 0x00, 0x00);
-    });
-    connect(m_btnReadDeviceInfo, &QPushButton::clicked, this, [this]() {
-        sendCommand(0x01, 0x00, 0x00);
-    });
-    connect(m_btnReadDiagnose, &QPushButton::clicked, this, [this]() {
-        sendCommand(0x09, 0x00, 0x00);
-    });
-
-    // Command table widget signal
-    connect(m_commandWidget, &CommandTableWidget::commandSendRequested, this, [this](quint8 cmd, quint8 sub, quint8 type, const QByteArray &data) {
-        sendCommand(cmd, sub, type, data);
-    });
-
-    // Connect button
-    connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
-
-    // Mode radio buttons
-    connect(m_modeGroup, &QButtonGroup::buttonClicked, this, [this](int id) {
-        onModeChanged(id);
-    });
-
-    // Start mock server on port 8067
-    if (m_mockServer->start(8067)) {
-        m_connectionStatusLabel->setText("Mock模式 (本地8067)");
-        m_connectionStatusLabel->setStyleSheet("color: #FF9800; font-weight: bold;");
-    } else {
-        m_connectionStatusLabel->setText("Mock服务器启动失败");
-        m_connectionStatusLabel->setStyleSheet("color: #F44336; font-weight: bold;");
-    }
+    setupToolBar();
+    setupTabs();
+    setupConnections();
+    updateConnectionIndicator(Disconnected);
 }
 
 MainWindow::~MainWindow()
 {
 }
 
-void MainWindow::setupUi()
+void MainWindow::setupToolBar()
 {
-    resize(1280, 800);
-    setWindowTitle("GSK988 Debug Tool");
+    auto* toolbar = addToolBar("工具栏");
+    toolbar->setMovable(false);
 
-    // Central widget
-    m_centralWidget = new QWidget(this);
-    setCentralWidget(m_centralWidget);
+    // IP
+    toolbar->addWidget(new QLabel(" IP: "));
+    m_ipEdit = new QLineEdit("192.168.1.100");
+    m_ipEdit->setFixedWidth(130);
+    toolbar->addWidget(m_ipEdit);
 
-    // Main horizontal layout with splitter
-    QHBoxLayout *mainLayout = new QHBoxLayout(m_centralWidget);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
-
-    m_mainSplitter = new QSplitter(Qt::Horizontal, m_centralWidget);
-    mainLayout->addWidget(m_mainSplitter);
-
-    // Left panel (fixed 220px)
-    m_leftPanel = new QWidget(m_mainSplitter);
-    m_leftPanel->setFixedWidth(220);
-    m_leftPanel->setStyleSheet("background-color: #F5F5F5; border-right: 1px solid #E0E0E0;");
-
-    QVBoxLayout *leftLayout = new QVBoxLayout(m_leftPanel);
-    leftLayout->setContentsMargins(10, 10, 10, 10);
-    leftLayout->setSpacing(15);
-
-    // Connection Group
-    QGroupBox *connGroup = new QGroupBox("连接", m_leftPanel);
-    connGroup->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #ddd; border-radius: 4px; margin-top: 8px; }");
-    QVBoxLayout *connLayout = new QVBoxLayout(connGroup);
-
-    // IP Edit
-    m_ipEdit = new QLineEdit(connGroup);
-    m_ipEdit->setPlaceholderText("192.168.1.100");
-    m_ipEdit->setText("127.0.0.1");
-    connLayout->addWidget(new QLabel("IP地址:", connGroup));
-    connLayout->addWidget(m_ipEdit);
-
-    // Port Spin
-    m_portSpin = new QSpinBox(connGroup);
+    // Port
+    toolbar->addWidget(new QLabel(" 端口: "));
+    m_portSpin = new QSpinBox;
     m_portSpin->setRange(1, 65535);
-    m_portSpin->setValue(8067);
-    connLayout->addWidget(new QLabel("端口:", connGroup));
-    connLayout->addWidget(m_portSpin);
+    m_portSpin->setValue(6000);
+    m_portSpin->setFixedWidth(80);
+    toolbar->addWidget(m_portSpin);
 
-    // Connect Button
-    m_connectBtn = new QPushButton("连接", connGroup);
-    m_connectBtn->setStyleSheet("QPushButton { background-color: #2D7D46; color: white; border: none; border-radius: 4px; padding: 8px; font-weight: bold; } QPushButton:hover { background-color: #33A058; }");
-    connLayout->addWidget(m_connectBtn);
+    toolbar->addSeparator();
 
-    leftLayout->addWidget(connGroup);
+    // Mode
+    m_modeCombo = new QComboBox;
+    m_modeCombo->addItems({"真实设备", "Mock模式"});
+    toolbar->addWidget(m_modeCombo);
 
-    // Mode Group
-    QGroupBox *modeGroup = new QGroupBox("模式", m_leftPanel);
-    modeGroup->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #ddd; border-radius: 4px; margin-top: 8px; }");
-    QVBoxLayout *modeLayout = new QVBoxLayout(modeGroup);
+    toolbar->addSeparator();
 
-    m_modeGroup = new QButtonGroup(modeGroup);
-    m_realDeviceRadio = new QRadioButton("真实设备", modeGroup);
-    m_mockServerRadio = new QRadioButton("Mock服务器", modeGroup);
-    m_mockServerRadio->setChecked(true);
-    m_modeGroup->addButton(m_realDeviceRadio, 0);
-    m_modeGroup->addButton(m_mockServerRadio, 1);
+    // Connect button
+    m_connectBtn = new QPushButton("连接");
+    m_connectBtn->setFixedWidth(70);
+    toolbar->addWidget(m_connectBtn);
 
-    modeLayout->addWidget(m_realDeviceRadio);
-    modeLayout->addWidget(m_mockServerRadio);
+    // Status indicator
+    m_statusIndicator = new QLabel;
+    m_statusIndicator->setFixedSize(14, 14);
+    m_statusIndicator->setStyleSheet("background: gray; border-radius: 7px;");
+    toolbar->addWidget(m_statusIndicator);
 
-    leftLayout->addWidget(modeGroup);
+    m_statusLabel = new QLabel("未连接");
+    toolbar->addWidget(m_statusLabel);
+}
 
-    // Quick Group
-    QGroupBox *quickGroup = new QGroupBox("快捷操作", m_leftPanel);
-    quickGroup->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #ddd; border-radius: 4px; margin-top: 8px; }");
-    QGridLayout *quickLayout = new QGridLayout(quickGroup);
+void MainWindow::setupTabs()
+{
+    m_tabWidget = new QTabWidget;
+    setCentralWidget(m_tabWidget);
 
-    m_btnReadStatus = new QPushButton("读状态", quickGroup);
-    m_btnReadCoords = new QPushButton("读坐标", quickGroup);
-    m_btnReadAlarms = new QPushButton("读报警", quickGroup);
-    m_btnReadParams = new QPushButton("读参数", quickGroup);
-    m_btnReadDeviceInfo = new QPushButton("读设备信息", quickGroup);
-    m_btnReadDiagnose = new QPushButton("诊断", quickGroup);
+    m_realtimeTab = new RealtimeWidget;
+    m_commandTab = new CommandWidget;
+    m_parseTab = new ParseWidget;
+    m_logTab = new LogWidget;
 
-    quickLayout->addWidget(m_btnReadStatus, 0, 0);
-    quickLayout->addWidget(m_btnReadCoords, 0, 1);
-    quickLayout->addWidget(m_btnReadAlarms, 1, 0);
-    quickLayout->addWidget(m_btnReadParams, 1, 1);
-    quickLayout->addWidget(m_btnReadDeviceInfo, 2, 0);
-    quickLayout->addWidget(m_btnReadDiagnose, 2, 1);
+    m_tabWidget->addTab(m_realtimeTab, "实时数据");
+    m_tabWidget->addTab(m_commandTab, "发送指令");
+    m_tabWidget->addTab(m_parseTab, "数据解析");
+    m_tabWidget->addTab(m_logTab, "通讯日志");
+}
 
-    leftLayout->addWidget(quickGroup);
+void MainWindow::setupConnections()
+{
+    // Connect button
+    connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
 
-    // Add stretch to push everything up
-    leftLayout->addStretch();
+    // Client signals
+    connect(m_client, &TcpClient::connected, this, [this]() {
+        updateConnectionIndicator(Connected);
+        m_connectBtn->setText("断开");
+        m_statusLabel->setText("已连接");
+        // Send permission request first; polling starts after 0x0A response
+        m_needStartPolling = true;
+        QByteArray permFrame = m_protocol->buildRequest(0x0A);
+        m_client->sendFrame(permFrame);
+    });
 
-    // Connection status label at bottom of left panel
-    m_connectionStatusLabel = new QLabel("未连接", m_leftPanel);
-    m_connectionStatusLabel->setAlignment(Qt::AlignCenter);
-    m_connectionStatusLabel->setStyleSheet("color: #9E9E9E; font-weight: bold; padding: 5px;");
-    leftLayout->addWidget(m_connectionStatusLabel);
+    connect(m_client, &TcpClient::disconnected, this, [this]() {
+        updateConnectionIndicator(Disconnected);
+        m_connectBtn->setText("连接");
+        m_statusLabel->setText("未连接");
+        m_realtimeTab->stopPolling();
+        m_realtimeTab->clearData();
+    });
 
-    // Right side - Tab Widget
-    m_tabWidget = new QTabWidget(m_mainSplitter);
+    connect(m_client, &TcpClient::connectionError, this, [this](const QString& msg) {
+        updateConnectionIndicator(Error);
+        m_statusLabel->setText("连接失败");
+        m_logTab->logError(msg);
+    });
 
-    // Create tab widgets
-    m_realtimeWidget = new RealtimeWidget(m_tabWidget);
-    m_commandWidget = new CommandTableWidget(m_tabWidget);
-    m_parseWidget = new DataParseWidget(m_tabWidget);
-    m_logWidget = new LogWidget(m_tabWidget);
-    m_paramWidget = new ParamWidget(m_tabWidget);
+    connect(m_client, &TcpClient::responseReceived, this, &MainWindow::onResponseReceived);
+    connect(m_client, &TcpClient::responseTimeout, this, &MainWindow::onResponseTimeout);
 
-    // Populate command table
-    m_commandWidget->populateCommands();
+    // Realtime polling
+    connect(m_realtimeTab, &RealtimeWidget::pollRequest, this, [this](quint8 cmdCode, const QByteArray& params) {
+        QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+        m_client->sendFrame(frame);
 
-    // Add tabs
-    m_tabWidget->addTab(m_realtimeWidget, "实时数据");
-    m_tabWidget->addTab(m_commandWidget, "命令表");
-    m_tabWidget->addTab(m_parseWidget, "数据解析");
-    m_tabWidget->addTab(m_logWidget, "日志");
-    m_tabWidget->addTab(m_paramWidget, "参数");
+        auto cmd = Gsk988Protocol::commandDef(cmdCode);
+        m_logTab->logFrame(frame, true, QString("[0x%1] %2").arg(cmdCode, 2, 16, QChar('0')).toUpper().arg(cmd.name));
+        m_realtimeTab->appendHexDisplay(frame, true);
+    });
 
-    // Set splitter sizes (left 220, right stretches)
-    QList<int> sizes;
-    sizes << 220 << width() - 220;
-    m_mainSplitter->setSizes(sizes);
-    m_mainSplitter->setStretchFactor(1, 1);
+    // Command widget — manual send
+    connect(m_commandTab, &CommandWidget::sendCommand, this, [this](quint8 cmdCode, const QByteArray& params) {
+        QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+        m_waitingManualResponse = true;
+        m_client->sendFrame(frame);
+
+        auto cmd = Gsk988Protocol::commandDef(cmdCode);
+        m_logTab->logFrame(frame, true, QString("[0x%1] %2").arg(cmdCode, 2, 16, QChar('0')).toUpper().arg(cmd.name));
+    });
+
+    // Mock server log
+    connect(m_mockServer, &MockServer::logMessage, this, [this](const QString& msg) {
+        m_logTab->logError(msg);
+    });
 }
 
 void MainWindow::onConnectClicked()
 {
-    if (m_isConnected) {
+    if (m_client->isConnected()) {
         // Disconnect
-        if (m_isMockMode) {
-            m_isConnected = false;
-            updateConnectionStatus();
-        } else {
-            m_tcpClient->disconnect();
+        m_realtimeTab->stopPolling();
+        m_mockServer->stop();
+        m_client->disconnect();
+        return;
+    }
+
+    quint16 port = static_cast<quint16>(m_portSpin->value());
+    bool isMock = (m_modeCombo->currentIndex() == 1);
+
+    if (isMock) {
+        if (!m_mockServer->start(port)) {
+            m_logTab->logError("Mock服务器启动失败");
+            return;
         }
+        m_client->connectTo("127.0.0.1", port);
     } else {
-        // Connect
-        if (m_isMockMode) {
-            // Mock mode - just set connected flag, mock server already running
-            m_isConnected = true;
-            updateConnectionStatus();
-        } else {
-            // Real device mode
-            QString ip = m_ipEdit->text();
-            quint16 port = m_portSpin->value();
-            if (m_tcpClient->connectTo(ip, port)) {
-                m_isConnected = true;
-                updateConnectionStatus();
-            }
-        }
+        m_client->connectTo(m_ipEdit->text().trimmed(), port);
     }
 }
 
-void MainWindow::onModeChanged(int id)
+void MainWindow::onResponseReceived(const QByteArray& frame)
 {
-    if (id == 1) {
-        // Mock mode selected
-        m_isMockMode = true;
-        m_isConnected = false;
-        m_connectionStatusLabel->setText("Mock模式 (本地8067)");
-        m_connectionStatusLabel->setStyleSheet("color: #FF9800; font-weight: bold;");
-        m_connectBtn->setText("连接");
+    ParsedResponse resp = m_protocol->parseResponse(frame);
+
+    auto cmd = Gsk988Protocol::commandDef(resp.cmdCode);
+    QString desc = QString("[0x%1] %2").arg(resp.cmdCode, 2, 16, QChar('0')).toUpper().arg(cmd.name);
+
+    if (!resp.isValid) {
+        desc += " — " + resp.errorString;
     } else {
-        // Real device mode
-        m_isMockMode = false;
-        m_isConnected = false;
-        m_connectionStatusLabel->setText("未连接");
-        m_connectionStatusLabel->setStyleSheet("color: #9E9E9E; font-weight: bold;");
-        m_connectBtn->setText("连接");
+        desc += " — 成功";
+    }
+
+    m_logTab->logFrame(frame, false, desc);
+    m_realtimeTab->appendHexDisplay(frame, false);
+
+    // Start polling after receiving the permission (0x0A) response
+    if (m_needStartPolling) {
+        m_needStartPolling = false;
+        m_realtimeTab->startPolling();
+    }
+
+    // Route to appropriate tab
+    m_realtimeTab->updateData(resp);
+
+    // Only show in command tab if this was a manual send
+    if (m_waitingManualResponse) {
+        m_waitingManualResponse = false;
+        QString interp = Gsk988Protocol::interpretData(resp.cmdCode, resp.rawData);
+        m_commandTab->showResponse(resp, interp);
     }
 }
 
-void MainWindow::sendCommand(quint8 cmd, quint8 sub, quint8 type, const QByteArray &data)
+void MainWindow::onResponseTimeout()
 {
-    QByteArray frame = FrameBuilder::buildFrame(cmd, sub, type, data);
+    m_logTab->logError("响应超时 (3秒)");
 
-    if (m_isMockMode) {
-        // In mock mode, just log the send - mock server responds on its own
-        m_logWidget->addLog("发送", QString("CMD=%1 SUB=%2 TYPE=%3").arg(cmd, 2, 16).arg(sub, 2, 16).arg(type, 2, 16), frame);
-    } else {
-        // Real mode
-        if (m_isConnected) {
-            m_tcpClient->sendFrame(frame);
-            m_logWidget->addLog("发送", QString("CMD=%1 SUB=%2 TYPE=%3").arg(cmd, 2, 16).arg(sub, 2, 16).arg(type, 2, 16), frame);
-        } else {
-            qDebug() << "Cannot send: not connected";
-        }
-    }
+    // Advance polling state on timeout
+    ParsedResponse dummy;
+    dummy.cmdCode = 0;
+    dummy.isValid = false;
+    m_realtimeTab->updateData(dummy);
 }
 
-void MainWindow::updateConnectionStatus()
+void MainWindow::updateConnectionIndicator(int state)
 {
-    if (m_isConnected) {
-        if (m_isMockMode) {
-            m_connectionStatusLabel->setText("Mock已连接");
-            m_connectionStatusLabel->setStyleSheet("color: #4CAF50; font-weight: bold;");
-        } else {
-            m_connectionStatusLabel->setText("已连接 " + m_ipEdit->text() + ":" + QString::number(m_portSpin->value()));
-            m_connectionStatusLabel->setStyleSheet("color: #4CAF50; font-weight: bold;");
-        }
-        m_connectBtn->setText("断开");
-    } else {
-        if (m_isMockMode) {
-            m_connectionStatusLabel->setText("Mock模式 (本地8067)");
-            m_connectionStatusLabel->setStyleSheet("color: #FF9800; font-weight: bold;");
-        } else {
-            m_connectionStatusLabel->setText("未连接");
-            m_connectionStatusLabel->setStyleSheet("color: #9E9E9E; font-weight: bold;");
-        }
-        m_connectBtn->setText("连接");
+    QString color;
+    switch (static_cast<ConnState>(state)) {
+    case Connected:  color = "#4CAF50"; break;
+    case Error:      color = "#F44336"; break;
+    case Disconnected:
+    default:         color = "gray"; break;
     }
+    m_statusIndicator->setStyleSheet(
+        QString("background: %1; border-radius: 7px;").arg(color));
+}
+
+void MainWindow::notifyXtuis(const QString& title, const QString& content)
+{
+    static const QString token = "GxtK0TGB4okvVfX7CxsxtBeDg";
+    QUrl url(QString("https://wx.xtuis.cn/%1.send").arg(token));
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
+
+    QUrlQuery params;
+    params.addQueryItem("text", title);
+    params.addQueryItem("desp", content);
+
+    auto* manager = new QNetworkAccessManager(this);
+    connect(manager, &QNetworkAccessManager::finished, manager, &QNetworkAccessManager::deleteLater);
+    manager->post(request, params.toString(QUrl::FullyEncoded).toUtf8());
 }

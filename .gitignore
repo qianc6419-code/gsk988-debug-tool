@@ -1,0 +1,20 @@
+# Build output
+release/
+debug/
+*.o
+*.obj
+*.exe
+*.dll
+
+# Qt generated
+Makefile*
+.qmake.stash
+object_script.*
+moc_*
+ui_*
+qrc_*
+
+# IDE
+.vscode/
+.idea/
+*.user
