@@ -91,7 +91,7 @@ QByteArray ModbusFrameBuilder::encodeCoilValues(const QVector<bool>& coils)
     QByteArray bytes(byteCount, '\0');
     for (int i = 0; i < coils.size(); ++i) {
         if (coils[i])
-            bytes[i / 8] |= (1 << (i % 8));
+            bytes[i / 8] = static_cast<char>(static_cast<quint8>(bytes[i / 8]) | (1 << (i % 8)));
     }
     return bytes;
 }

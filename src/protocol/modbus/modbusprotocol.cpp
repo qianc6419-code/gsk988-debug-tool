@@ -11,10 +11,10 @@ QVector<quint16> ModbusProtocol::s_mockInputRegs;
 void ModbusProtocol::initMockMemory()
 {
     if (!s_mockCoils.isEmpty()) return;
-    s_mockCoils.resize(65536, false);
-    s_mockDiscreteInputs.resize(65536, false);
-    s_mockHoldingRegs.resize(65536, 0);
-    s_mockInputRegs.resize(65536, 0);
+    s_mockCoils = QVector<bool>(65536, false);
+    s_mockDiscreteInputs = QVector<bool>(65536, false);
+    s_mockHoldingRegs = QVector<quint16>(65536, 0);
+    s_mockInputRegs = QVector<quint16>(65536, 0);
 
     s_mockCoils[0] = true;
     s_mockCoils[1] = false;
@@ -349,7 +349,7 @@ QByteArray ModbusProtocol::mockResponseData(quint8 cmdCode, const QByteArray& re
         QByteArray coilBytes(byteCount, '\0');
         for (int i = 0; i < qty && (addr + i) < s_mockCoils.size(); ++i) {
             if (s_mockCoils[addr + i])
-                coilBytes[i / 8] |= (1 << (i % 8));
+                coilBytes[i / 8] = static_cast<char>(static_cast<quint8>(coilBytes[i / 8]) | (1 << (i % 8)));
         }
         respData.append(static_cast<char>(byteCount));
         respData.append(coilBytes);
@@ -364,7 +364,7 @@ QByteArray ModbusProtocol::mockResponseData(quint8 cmdCode, const QByteArray& re
         QByteArray inputBytes(byteCount, '\0');
         for (int i = 0; i < qty && (addr + i) < s_mockDiscreteInputs.size(); ++i) {
             if (s_mockDiscreteInputs[addr + i])
-                inputBytes[i / 8] |= (1 << (i % 8));
+                inputBytes[i / 8] = static_cast<char>(static_cast<quint8>(inputBytes[i / 8]) | (1 << (i % 8)));
         }
         respData.append(static_cast<char>(byteCount));
         respData.append(inputBytes);
