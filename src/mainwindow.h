@@ -2,23 +2,26 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-#include <QLineEdit>
-#include <QSpinBox>
 #include <QComboBox>
 #include <QPushButton>
 #include <QLabel>
 #include <QTabWidget>
+#include <QTimer>
+#include <QByteArray>
 
-class Gsk988Protocol;
-class TcpClient;
+class ITransport;
+class IProtocol;
+class IProtocolWidgetFactory;
 class MockServer;
-class RealtimeWidget;
-class CommandWidget;
-class ParseWidget;
 class LogWidget;
 
-class MainWindow : public QMainWindow
-{
+// Forward declare GSK988-specific widget signals we need
+class Gsk988RealtimeWidget;
+class Gsk988CommandWidget;
+class ModbusRealtimeWidget;
+class ModbusCommandWidget;
+
+class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
@@ -26,37 +29,51 @@ public:
 
 private slots:
     void onConnectClicked();
-    void onResponseReceived(const QByteArray& frame);
+    void onProtocolChanged();
+    void onTransportChanged();
+    void onDataReceived(const QByteArray& rawData);
     void onResponseTimeout();
 
 private:
     void setupToolBar();
     void setupTabs();
-    void setupConnections();
+    void switchProtocol(int index);
+    void switchTransport(int index);
+    void setupProtocolConnections();
     void updateConnectionIndicator(int state);
     void notifyXtuis(const QString& title, const QString& content);
 
     enum ConnState { Disconnected = 0, Connected = 1, Error = 2 };
 
-    Gsk988Protocol* m_protocol;
-    TcpClient* m_client;
-    MockServer* m_mockServer;
+    // Core objects
+    ITransport* m_transport = nullptr;
+    IProtocol* m_protocol = nullptr;
+    IProtocolWidgetFactory* m_widgetFactory = nullptr;
+    MockServer* m_mockServer = nullptr;
 
-    QLineEdit* m_ipEdit;
-    QSpinBox* m_portSpin;
+    // Transport config widget (owned by toolbar layout)
+    QWidget* m_transportConfigWidget = nullptr;
+
+    // Toolbar controls
+    QComboBox* m_protocolCombo;
+    QComboBox* m_transportCombo;
     QComboBox* m_modeCombo;
     QPushButton* m_connectBtn;
     QLabel* m_statusIndicator;
     QLabel* m_statusLabel;
 
+    // Tabs
     QTabWidget* m_tabWidget;
-    RealtimeWidget* m_realtimeTab;
-    CommandWidget* m_commandTab;
-    ParseWidget* m_parseTab;
+    QWidget* m_realtimeTab = nullptr;
+    QWidget* m_commandTab = nullptr;
+    QWidget* m_parseTab = nullptr;
     LogWidget* m_logTab;
 
-    bool m_waitingManualResponse;
-    bool m_needStartPolling;
+    // State (moved from TcpClient)
+    QTimer* m_timeoutTimer;
+    QByteArray m_buffer;
+    bool m_waitingManualResponse = false;
+    bool m_needStartPolling = false;
 };
 
 #endif // MAINWINDOW_H
