@@ -8,6 +8,36 @@
 #include <QLabel>
 #include <cstring>
 
+// ========== Shared Styles ==========
+
+static const char* GROUP_STYLE =
+    "QGroupBox {"
+    "  font-weight: bold;"
+    "  font-size: 12px;"
+    "  border: 1px solid #c8c8c8;"
+    "  border-radius: 6px;"
+    "  margin-top: 12px;"
+    "  padding: 10px 6px 6px 6px;"
+    "  background: #ffffff;"
+    "}"
+    "QGroupBox::title {"
+    "  subcontrol-origin: margin;"
+    "  subcontrol-position: top left;"
+    "  padding: 2px 8px;"
+    "  color: #333;"
+    "}";
+
+static const char* VALUE_STYLE =
+    "font-size: 13px; font-weight: bold; font-family: Consolas, 'Courier New', monospace;"
+    "color: #1a1a1a; padding: 2px 6px;"
+    "background: #f5f6f8; border: 1px solid #dcdfe3; border-radius: 3px;";
+
+static const char* COORD_HEADER_STYLE =
+    "font-weight: bold; font-size: 12px; color: #666; padding: 2px 4px;";
+
+static const char* COORD_ROW_STYLE =
+    "font-size: 12px; color: #555; padding: 2px 4px;";
+
 // ========== Poll Items ==========
 
 const FanucRealtimeWidget::PollItem FanucRealtimeWidget::pollItems[] = {
@@ -64,27 +94,44 @@ FanucRealtimeWidget::FanucRealtimeWidget(QWidget* parent)
 static QLabel* makeValueLabel()
 {
     auto* lbl = new QLabel("--");
-    lbl->setStyleSheet("font-size: 13px; font-weight: bold;");
+    lbl->setStyleSheet(VALUE_STYLE);
+    lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lbl->setFixedHeight(22);
     lbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    return lbl;
+}
+
+static QLabel* makeRowLabel(const QString& text)
+{
+    auto* lbl = new QLabel(text);
+    lbl->setStyleSheet(COORD_ROW_STYLE);
+    return lbl;
+}
+
+static QLabel* makeHeaderLabel(const QString& text)
+{
+    auto* lbl = new QLabel(text);
+    lbl->setStyleSheet(COORD_HEADER_STYLE);
+    lbl->setAlignment(Qt::AlignCenter);
     return lbl;
 }
 
 void FanucRealtimeWidget::setLabelOK(QLabel* label, const QString& text)
 {
     label->setText(text);
-    label->setStyleSheet("font-size: 13px; font-weight: bold;");
+    label->setStyleSheet(VALUE_STYLE);
 }
 
 void FanucRealtimeWidget::setLabelError(QLabel* label, const QString& /*err*/)
 {
     label->setText("--");
-    label->setStyleSheet("font-size: 13px; font-weight: bold;");
+    label->setStyleSheet(VALUE_STYLE);
 }
 
 void FanucRealtimeWidget::resetLabel(QLabel* label)
 {
     label->setText("--");
-    label->setStyleSheet("font-size: 13px; font-weight: bold;");
+    label->setStyleSheet(VALUE_STYLE);
 }
 
 static QString modeStr(qint16 mode)
@@ -130,9 +177,11 @@ static QString formatTime(int seconds)
 void FanucRealtimeWidget::setupUI()
 {
     auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSpacing(6);
 
     // === Control bar ===
     auto* controlBar = new QHBoxLayout;
+    controlBar->setSpacing(8);
     m_autoRefreshCheck = new QCheckBox("自动刷新");
     m_autoRefreshCheck->setChecked(true);
     controlBar->addWidget(m_autoRefreshCheck);
@@ -153,23 +202,20 @@ void FanucRealtimeWidget::setupUI()
     // === Scroll area ===
     auto* scrollArea = new QScrollArea;
     scrollArea->setWidgetResizable(true);
+    scrollArea->setStyleSheet("QScrollArea { border: none; background: #f0f0f0; }");
     auto* scrollWidget = new QWidget;
+    scrollWidget->setStyleSheet("background: #f0f0f0;");
     auto* grid = new QGridLayout(scrollWidget);
+    grid->setSpacing(8);
+    grid->setContentsMargins(6, 6, 6, 6);
 
-    // Row 0: 系统信息 | 运行状态 | 主轴
-    m_sysInfoGroup = new QGroupBox("系统信息");
-    {
-        auto* l = new QFormLayout;
-        m_ncTypeLabel = makeValueLabel();
-        m_deviceTypeLabel = makeValueLabel();
-        l->addRow("NC型号:", m_ncTypeLabel);
-        l->addRow("设备类型:", m_deviceTypeLabel);
-        m_sysInfoGroup->setLayout(l);
-    }
+    // ===== Row 0: 运行状态 | 主轴 | 进给 =====
 
     m_runStatusGroup = new QGroupBox("运行状态");
+    m_runStatusGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QFormLayout;
+        l->setSpacing(4);
         m_modeLabel = makeValueLabel();
         m_runStatusLabel = makeValueLabel();
         m_emgLabel = makeValueLabel();
@@ -182,8 +228,10 @@ void FanucRealtimeWidget::setupUI()
     }
 
     m_spindleGroup = new QGroupBox("主轴");
+    m_spindleGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QFormLayout;
+        l->setSpacing(4);
         m_spindleSpeedLabel = makeValueLabel();
         m_spindleLoadLabel = makeValueLabel();
         m_spindleOverrideLabel = makeValueLabel();
@@ -191,26 +239,43 @@ void FanucRealtimeWidget::setupUI()
         l->addRow("速度:", m_spindleSpeedLabel);
         l->addRow("负载:", m_spindleLoadLabel);
         l->addRow("倍率:", m_spindleOverrideLabel);
-        l->addRow("速度设定值:", m_spindleSpeedSetLabel);
+        l->addRow("速度设定:", m_spindleSpeedSetLabel);
         m_spindleGroup->setLayout(l);
     }
 
-    // Row 1: 进给 | 计数与时间 | 程序与刀具
     m_feedGroup = new QGroupBox("进给");
+    m_feedGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QFormLayout;
+        l->setSpacing(4);
         m_feedRateLabel = makeValueLabel();
         m_feedOverrideLabel = makeValueLabel();
         m_feedRateSetLabel = makeValueLabel();
         l->addRow("速度:", m_feedRateLabel);
         l->addRow("倍率:", m_feedOverrideLabel);
-        l->addRow("速度设定值:", m_feedRateSetLabel);
+        l->addRow("速度设定:", m_feedRateSetLabel);
         m_feedGroup->setLayout(l);
     }
 
-    m_counterTimeGroup = new QGroupBox("计数与时间");
+    // ===== Row 1: 系统信息 | 计数与时间 | 程序与刀具 =====
+
+    m_sysInfoGroup = new QGroupBox("系统信息");
+    m_sysInfoGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QFormLayout;
+        l->setSpacing(4);
+        m_ncTypeLabel = makeValueLabel();
+        m_deviceTypeLabel = makeValueLabel();
+        l->addRow("NC型号:", m_ncTypeLabel);
+        l->addRow("设备类型:", m_deviceTypeLabel);
+        m_sysInfoGroup->setLayout(l);
+    }
+
+    m_counterTimeGroup = new QGroupBox("计数与时间");
+    m_counterTimeGroup->setStyleSheet(GROUP_STYLE);
+    {
+        auto* l = new QFormLayout;
+        l->setSpacing(4);
         m_productsLabel = makeValueLabel();
         m_runTimeLabel = makeValueLabel();
         m_cutTimeLabel = makeValueLabel();
@@ -225,8 +290,10 @@ void FanucRealtimeWidget::setupUI()
     }
 
     m_progToolGroup = new QGroupBox("程序与刀具");
+    m_progToolGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QFormLayout;
+        l->setSpacing(4);
         m_progNumLabel = makeValueLabel();
         m_toolNumLabel = makeValueLabel();
         l->addRow("程序号:", m_progNumLabel);
@@ -234,53 +301,70 @@ void FanucRealtimeWidget::setupUI()
         m_progToolGroup->setLayout(l);
     }
 
-    // Row 2: 告警 | 坐标
+    // ===== Row 2: 告警 | 坐标(2col span) =====
+
     m_alarmGroup = new QGroupBox("告警");
+    m_alarmGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QVBoxLayout;
         m_alarmDisplay = new QTextEdit;
         m_alarmDisplay->setReadOnly(true);
-        m_alarmDisplay->setMaximumHeight(100);
-        m_alarmDisplay->setStyleSheet("QTextEdit { font-size: 12px; background: #f8f8f8; }");
+        m_alarmDisplay->setMaximumHeight(120);
+        m_alarmDisplay->setStyleSheet(
+            "QTextEdit { font-size: 12px; background: #fff; "
+            "border: 1px solid #dcdfe3; border-radius: 3px; padding: 4px; }");
         m_alarmDisplay->setPlaceholderText("无告警");
         l->addWidget(m_alarmDisplay);
         m_alarmGroup->setLayout(l);
     }
 
     m_coordGroup = new QGroupBox("坐标");
+    m_coordGroup->setStyleSheet(GROUP_STYLE);
     {
         auto* l = new QGridLayout;
+        l->setSpacing(4);
+        l->setContentsMargins(8, 16, 8, 8);
         // Header row
-        l->addWidget(new QLabel(""), 0, 0);
-        l->addWidget(new QLabel("X"), 0, 1);
-        l->addWidget(new QLabel("Y"), 0, 2);
-        l->addWidget(new QLabel("Z"), 0, 3);
-        // Row labels
-        l->addWidget(new QLabel("绝对坐标:"), 1, 0);
-        l->addWidget(new QLabel("机械坐标:"), 2, 0);
-        l->addWidget(new QLabel("相对坐标:"), 3, 0);
-        l->addWidget(new QLabel("剩余距离:"), 4, 0);
+        l->addWidget(makeHeaderLabel(""), 0, 0);
+        l->addWidget(makeHeaderLabel("X"), 0, 1);
+        l->addWidget(makeHeaderLabel("Y"), 0, 2);
+        l->addWidget(makeHeaderLabel("Z"), 0, 3);
+        // Separator line
+        auto* sep = new QFrame;
+        sep->setFrameShape(QFrame::HLine);
+        sep->setStyleSheet("color: #d0d0d0;");
+        l->addWidget(sep, 1, 0, 1, 4);
+        // Data rows
+        l->addWidget(makeRowLabel("绝对坐标:"), 2, 0);
+        l->addWidget(makeRowLabel("机械坐标:"), 3, 0);
+        l->addWidget(makeRowLabel("相对坐标:"), 4, 0);
+        l->addWidget(makeRowLabel("剩余距离:"), 5, 0);
         for (int i = 0; i < 3; ++i) {
             m_posAbs[i] = makeValueLabel();
             m_posMach[i] = makeValueLabel();
             m_posRel[i] = makeValueLabel();
             m_posRes[i] = makeValueLabel();
-            l->addWidget(m_posAbs[i], 1, i + 1);
-            l->addWidget(m_posMach[i], 2, i + 1);
-            l->addWidget(m_posRel[i], 3, i + 1);
-            l->addWidget(m_posRes[i], 4, i + 1);
+            l->addWidget(m_posAbs[i], 2, i + 1);
+            l->addWidget(m_posMach[i], 3, i + 1);
+            l->addWidget(m_posRel[i], 4, i + 1);
+            l->addWidget(m_posRes[i], 5, i + 1);
         }
         m_coordGroup->setLayout(l);
     }
 
-    grid->addWidget(m_sysInfoGroup,    0, 0);
-    grid->addWidget(m_runStatusGroup,  0, 1);
-    grid->addWidget(m_spindleGroup,    0, 2);
-    grid->addWidget(m_feedGroup,       1, 0);
+    // Grid layout
+    grid->addWidget(m_runStatusGroup,  0, 0);
+    grid->addWidget(m_spindleGroup,    0, 1);
+    grid->addWidget(m_feedGroup,       0, 2);
+    grid->addWidget(m_sysInfoGroup,    1, 0);
     grid->addWidget(m_counterTimeGroup,1, 1);
     grid->addWidget(m_progToolGroup,   1, 2);
     grid->addWidget(m_alarmGroup,      2, 0);
     grid->addWidget(m_coordGroup,      2, 1, 1, 2);
+
+    // Make columns equal width
+    for (int c = 0; c < 3; ++c)
+        grid->setColumnStretch(c, 1);
 
     scrollArea->setWidget(scrollWidget);
 
@@ -322,7 +406,6 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
 
         switch (currentIdx) {
         case PI_SYSINFO: { // 0x01 系统信息
-            // NC type at offset 8..27 (20 bytes string), device type at offset 28..31
             if (data.size() >= 32) {
                 QString ncType = QString::fromLatin1(data.mid(8, 20)).trimmed();
                 qint32 devType = FB::decodeInt32(data, 28);
@@ -332,7 +415,6 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
             break;
         }
         case PI_RUNINFO: { // 0x02 运行信息
-            // mode(2B) at offset 28, status(2B) at 30, emg(2B) at 32, alm(2B) at 34
             if (data.size() >= 36) {
                 qint16 mode = FB::decodeInt16(data, 28);
                 qint16 status = FB::decodeInt16(data, 30);
@@ -470,7 +552,6 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
         case PI_POS_MACH:  // 0x13 机械坐标
         case PI_POS_REL:   // 0x14 相对坐标
         case PI_POS_RES: { // 0x15 剩余距离坐标
-            // axis count at offset 28, then each axis is 8 bytes (calcValue)
             QLabel** targetLabels = nullptr;
             switch (currentIdx) {
             case PI_POS_ABS:  targetLabels = m_posAbs;  break;
