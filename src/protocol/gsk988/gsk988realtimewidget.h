@@ -1,5 +1,5 @@
-#ifndef REALTIMEWIDGET_H
-#define REALTIMEWIDGET_H
+#ifndef GSK988REALTIMEWIDGET_H
+#define GSK988REALTIMEWIDGET_H
 
 #include <QWidget>
 #include <QGroupBox>
@@ -10,13 +10,13 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
-#include "protocol/gsk988protocol.h"
+#include "protocol/iprotocol.h"
 
-class RealtimeWidget : public QWidget
+class Gsk988RealtimeWidget : public QWidget
 {
     Q_OBJECT
 public:
-    explicit RealtimeWidget(QWidget* parent = nullptr);
+    explicit Gsk988RealtimeWidget(QWidget* parent = nullptr);
 
     void updateData(const ParsedResponse& resp);
     void startPolling();
@@ -154,4 +154,4 @@ private:
     static const PollItem pollItems[];
 };
 
-#endif // REALTIMEWIDGET_H
+#endif // GSK988REALTIMEWIDGET_H

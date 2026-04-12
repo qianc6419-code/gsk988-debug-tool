@@ -26,6 +26,12 @@ SOURCES += \
     src/protocol/modbus/modbusrealtimewidget.cpp \
     src/protocol/modbus/modbuscommandwidget.cpp \
     src/protocol/modbus/modbusparsewidget.cpp \
+    src/protocol/fanuc/fanucprotocol.cpp \
+    src/protocol/fanuc/fanucframebuilder.cpp \
+    src/protocol/fanuc/fanucwidgetfactory.cpp \
+    src/protocol/fanuc/fanucrealtimewidget.cpp \
+    src/protocol/fanuc/fanuccommandwidget.cpp \
+    src/protocol/fanuc/fanucparsewidget.cpp \
     src/ui/logwidget.cpp
 
 HEADERS += \
@@ -47,5 +53,11 @@ HEADERS += \
     src/protocol/modbus/modbusrealtimewidget.h \
     src/protocol/modbus/modbuscommandwidget.h \
     src/protocol/modbus/modbusparsewidget.h \
+    src/protocol/fanuc/fanucprotocol.h \
+    src/protocol/fanuc/fanucframebuilder.h \
+    src/protocol/fanuc/fanucwidgetfactory.h \
+    src/protocol/fanuc/fanucrealtimewidget.h \
+    src/protocol/fanuc/fanuccommandwidget.h \
+    src/protocol/fanuc/fanucparsewidget.h \
     src/ui/iprotocolwidgetfactory.h \
     src/ui/logwidget.h

@@ -6,13 +6,12 @@
 #include <QTcpSocket>
 #include <QList>
 
-class Gsk988Protocol;
+class IProtocol;
 
-class MockServer : public QObject
-{
+class MockServer : public QObject {
     Q_OBJECT
 public:
-    explicit MockServer(QObject* parent = nullptr);
+    explicit MockServer(IProtocol* protocol, QObject* parent = nullptr);
     ~MockServer();
 
     bool start(quint16 port = 6000);
@@ -30,7 +29,7 @@ private slots:
 private:
     QTcpServer* m_server;
     QList<QTcpSocket*> m_clients;
-    Gsk988Protocol* m_protocol;
+    IProtocol* m_protocol;
 };
 
 #endif // MOCKSERVER_H

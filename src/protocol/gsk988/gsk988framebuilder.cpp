@@ -1,9 +1,9 @@
-#include "framebuilder.h"
+#include "gsk988framebuilder.h"
 
-const QByteArray FrameBuilder::REQUEST_ID  = QByteArray::fromHex("6fc81e641e171017");
-const QByteArray FrameBuilder::RESPONSE_ID = QByteArray::fromHex("00641ec81e171001");
+const QByteArray Gsk988FrameBuilder::REQUEST_ID  = QByteArray::fromHex("6fc81e641e171017");
+const QByteArray Gsk988FrameBuilder::RESPONSE_ID = QByteArray::fromHex("00641ec81e171001");
 
-QByteArray FrameBuilder::buildRequestFrame(const QByteArray& dataField)
+QByteArray Gsk988FrameBuilder::buildRequestFrame(const QByteArray& dataField)
 {
     // Length = REQUEST_ID(8) + dataField
     quint16 len = static_cast<quint16>(REQUEST_ID.size() + dataField.size());
@@ -30,7 +30,7 @@ QByteArray FrameBuilder::buildRequestFrame(const QByteArray& dataField)
     return frame;
 }
 
-QByteArray FrameBuilder::buildResponseFrame(const QByteArray& dataField)
+QByteArray Gsk988FrameBuilder::buildResponseFrame(const QByteArray& dataField)
 {
     quint16 len = static_cast<quint16>(RESPONSE_ID.size() + dataField.size());
 
@@ -52,7 +52,7 @@ QByteArray FrameBuilder::buildResponseFrame(const QByteArray& dataField)
     return frame;
 }
 
-QByteArray FrameBuilder::extractFrame(QByteArray& buffer)
+QByteArray Gsk988FrameBuilder::extractFrame(QByteArray& buffer)
 {
     // Find frame head 0x93 0x00
     int headPos = -1;
@@ -98,7 +98,7 @@ QByteArray FrameBuilder::extractFrame(QByteArray& buffer)
     return frame;
 }
 
-bool FrameBuilder::validateFrame(const QByteArray& frame)
+bool Gsk988FrameBuilder::validateFrame(const QByteArray& frame)
 {
     if (frame.size() < 6) // minimum: head(2) + length(2) + tail(2)
         return false;

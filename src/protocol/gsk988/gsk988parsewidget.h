@@ -1,17 +1,17 @@
-#ifndef PARSEWIDGET_H
-#define PARSEWIDGET_H
+#ifndef GSK988PARSEWIDGET_H
+#define GSK988PARSEWIDGET_H
 
 #include <QWidget>
 #include <QTextEdit>
 #include <QPushButton>
+#include "gsk988protocol.h"
+#include "gsk988framebuilder.h"
 
-class Gsk988Protocol;
-
-class ParseWidget : public QWidget
+class Gsk988ParseWidget : public QWidget
 {
     Q_OBJECT
 public:
-    explicit ParseWidget(QWidget* parent = nullptr);
+    explicit Gsk988ParseWidget(QWidget* parent = nullptr);
 
 private:
     void setupUI();
@@ -24,4 +24,4 @@ private:
     Gsk988Protocol* m_protocol;
 };
 
-#endif // PARSEWIDGET_H
+#endif // GSK988PARSEWIDGET_H

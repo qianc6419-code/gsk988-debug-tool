@@ -54,10 +54,10 @@ void ModbusRealtimeWidget::setupUI()
 
     addRow->addWidget(new QLabel("功能码:"));
     m_funcCombo = new QComboBox;
-    m_funcCombo->addItem("03 - Read Holding Registers", 0x03);
-    m_funcCombo->addItem("04 - Read Input Registers", 0x04);
-    m_funcCombo->addItem("01 - Read Coils", 0x01);
-    m_funcCombo->addItem("02 - Read Discrete Inputs", 0x02);
+    m_funcCombo->addItem("01 - 读线圈", 0x01);
+    m_funcCombo->addItem("02 - 读离散输入", 0x02);
+    m_funcCombo->addItem("03 - 读保持寄存器", 0x03);
+    m_funcCombo->addItem("04 - 读输入寄存器", 0x04);
     addRow->addWidget(m_funcCombo);
 
     addRow->addWidget(new QLabel("数量:"));

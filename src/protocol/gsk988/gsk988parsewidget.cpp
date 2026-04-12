@@ -1,18 +1,16 @@
-#include "parsewidget.h"
-#include "protocol/gsk988protocol.h"
-#include "protocol/framebuilder.h"
+#include "gsk988parsewidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 
-ParseWidget::ParseWidget(QWidget* parent)
+Gsk988ParseWidget::Gsk988ParseWidget(QWidget* parent)
     : QWidget(parent)
     , m_protocol(new Gsk988Protocol(this))
 {
     setupUI();
 }
 
-void ParseWidget::setupUI()
+void Gsk988ParseWidget::setupUI()
 {
     auto* mainLayout = new QVBoxLayout(this);
 
@@ -25,7 +23,7 @@ void ParseWidget::setupUI()
 
     m_parseBtn = new QPushButton("解析");
     m_parseBtn->setFixedWidth(80);
-    connect(m_parseBtn, &QPushButton::clicked, this, &ParseWidget::doParse);
+    connect(m_parseBtn, &QPushButton::clicked, this, &Gsk988ParseWidget::doParse);
 
     auto* inputBar = new QHBoxLayout;
     inputBar->addWidget(m_hexInput, 3);
@@ -45,7 +43,7 @@ void ParseWidget::setupUI()
     mainLayout->addWidget(m_resultDisplay, 1);
 }
 
-void ParseWidget::doParse()
+void Gsk988ParseWidget::doParse()
 {
     QString text = m_hexInput->toPlainText();
     // Clean input: remove spaces, commas, 0x prefixes
@@ -62,7 +60,7 @@ void ParseWidget::doParse()
         return;
     }
 
-    if (!FrameBuilder::validateFrame(frame)) {
+    if (!Gsk988FrameBuilder::validateFrame(frame)) {
         m_resultDisplay->setHtml("<span style='color:red;'>帧校验失败：请检查帧头(93 00)、帧尾(55 AA)和长度是否正确</span>");
         return;
     }
@@ -70,8 +68,8 @@ void ParseWidget::doParse()
     // Determine frame type by checking identifier
     int idOffset = 4; // after head(2) + length(2)
     QByteArray identifier = frame.mid(idOffset, 8);
-    bool isRequest = (identifier == FrameBuilder::REQUEST_ID);
-    bool isResponse = (identifier == FrameBuilder::RESPONSE_ID);
+    bool isRequest = (identifier == Gsk988FrameBuilder::REQUEST_ID);
+    bool isResponse = (identifier == Gsk988FrameBuilder::RESPONSE_ID);
 
     // Color mapping
     auto coloredHex = [](const QByteArray& ba, const QString& color) -> QString {
@@ -103,25 +101,16 @@ void ParseWidget::doParse()
         quint8 cmdCode = static_cast<quint8>(dataField[0]);
         html += QString("<br><b>命令码:</b> <span style='color:#4CAF50;'>%1</span> (%2)")
                     .arg(cmdCode, 2, 16, QChar('0')).toUpper()
-                    .arg(Gsk988Protocol::commandDef(cmdCode).name);
+                    .arg(Gsk988Protocol::commandDefRaw(cmdCode).name);
 
         if (isResponse && dataField.size() >= 3) {
-            quint16 errorCode = (static_cast<quint8>(dataField[1]) << 8) |
-                                 static_cast<quint8>(dataField[2]);
-            QString errColor = (errorCode == 0) ? "#4CAF50" : "#F44336";
-            html += QString("<br><b>错误码:</b> <span style='color:%1;'>0x%2</span>")
-                        .arg(errColor)
-                        .arg(errorCode, 4, 16, QChar('0')).toUpper();
-
             QByteArray additionalData = dataField.mid(3);
             if (!additionalData.isEmpty()) {
                 html += "<br><b>附加数据:</b> " + coloredHex(additionalData, "#9C27B0");
 
                 // Semantic interpretation for response frames
-                if (errorCode == 0) {
-                    QString interp = Gsk988Protocol::interpretData(cmdCode, additionalData);
-                    html += QString("<br><b>语义解析:</b> %1").arg(interp);
-                }
+                QString interp = Gsk988Protocol::interpretDataRaw(cmdCode, additionalData);
+                html += QString("<br><b>语义解析:</b> %1").arg(interp);
             }
         } else if (isRequest) {
             QByteArray params = dataField.mid(1);

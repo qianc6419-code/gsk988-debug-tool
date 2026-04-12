@@ -9,6 +9,10 @@
 #include "protocol/modbus/modbuswidgetfactory.h"
 #include "protocol/modbus/modbusrealtimewidget.h"
 #include "protocol/modbus/modbuscommandwidget.h"
+#include "protocol/fanuc/fanucprotocol.h"
+#include "protocol/fanuc/fanucwidgetfactory.h"
+#include "protocol/fanuc/fanucrealtimewidget.h"
+#include "protocol/fanuc/fanuccommandwidget.h"
 #include "network/mockserver.h"
 #include "ui/logwidget.h"
 #include "protocol/iprotocol.h"
@@ -39,16 +43,21 @@ MainWindow::MainWindow(QWidget* parent)
     setupToolBar();
     setupTabs();
 
-    // Create initial protocol and transport (both index 0)
-    switchProtocol(0);
-    switchTransport(0);
-
-    // Wire toolbar signals
+    // Wire toolbar signals BEFORE creating initial protocol/transport
     connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
     connect(m_protocolCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onProtocolChanged);
     connect(m_transportCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onTransportChanged);
+
+    // Create initial protocol and transport (both index 0)
+    // Block signals during setup to avoid triggering switchProtocol/switchTransport twice
+    m_protocolCombo->blockSignals(true);
+    m_transportCombo->blockSignals(true);
+    switchProtocol(0);
+    switchTransport(0);
+    m_protocolCombo->blockSignals(false);
+    m_transportCombo->blockSignals(false);
 
     updateConnectionIndicator(Disconnected);
 }
@@ -59,52 +68,53 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupToolBar()
 {
-    auto* toolbar = addToolBar("工具栏");
-    toolbar->setMovable(false);
+    m_toolbar = addToolBar("工具栏");
+    m_toolbar->setMovable(false);
 
     // Protocol combo
-    toolbar->addWidget(new QLabel(" 协议: "));
+    m_toolbar->addWidget(new QLabel(" 协议: "));
     m_protocolCombo = new QComboBox;
     m_protocolCombo->addItem("GSK988");
     m_protocolCombo->addItem("Modbus TCP");
-    toolbar->addWidget(m_protocolCombo);
+    m_protocolCombo->addItem("Fanuc FOCAS");
+    m_toolbar->addWidget(m_protocolCombo);
 
-    toolbar->addSeparator();
+    m_toolbar->addSeparator();
 
     // Transport combo
-    toolbar->addWidget(new QLabel(" 传输: "));
+    m_toolbar->addWidget(new QLabel(" 传输: "));
     m_transportCombo = new QComboBox;
     m_transportCombo->addItems({"TCP", "串口"});
-    toolbar->addWidget(m_transportCombo);
+    m_toolbar->addWidget(m_transportCombo);
 
-    toolbar->addSeparator();
+    m_toolbar->addSeparator();
 
     // Dynamic transport config area — placeholder label
     m_transportConfigWidget = new QLabel(" ");
-    toolbar->addWidget(m_transportConfigWidget);
+    m_transportConfigAction = m_toolbar->addWidget(m_transportConfigWidget);
 
-    toolbar->addSeparator();
+    m_toolbar->addSeparator();
 
     // Mode combo
     m_modeCombo = new QComboBox;
     m_modeCombo->addItems({"真实设备", "Mock模式"});
-    toolbar->addWidget(m_modeCombo);
+    m_toolbar->addWidget(m_modeCombo);
 
-    toolbar->addSeparator();
+    m_toolbar->addSeparator();
 
     // Connect button
     m_connectBtn = new QPushButton("连接");
     m_connectBtn->setFixedWidth(70);
-    toolbar->addWidget(m_connectBtn);
+    m_toolbar->addWidget(m_connectBtn);
 
     // Status indicator
     m_statusIndicator = new QLabel;
     m_statusIndicator->setFixedSize(14, 14);
     m_statusIndicator->setStyleSheet("background: gray; border-radius: 7px;");
-    toolbar->addWidget(m_statusIndicator);
+    m_toolbar->addWidget(m_statusIndicator);
 
     m_statusLabel = new QLabel("未连接");
-    toolbar->addWidget(m_statusLabel);
+    m_toolbar->addWidget(m_statusLabel);
 }
 
 void MainWindow::setupTabs()
@@ -123,6 +133,16 @@ void MainWindow::switchProtocol(int index)
     // If connected, disconnect first
     if (m_transport && m_transport->isConnected()) {
         m_transport->disconnectFromHost();
+    }
+
+    // Stop polling on current realtime widget before switching
+    if (m_realtimeTab) {
+        auto* rt = qobject_cast<Gsk988RealtimeWidget*>(m_realtimeTab);
+        if (rt) rt->stopPolling();
+        auto* modbusRt = qobject_cast<ModbusRealtimeWidget*>(m_realtimeTab);
+        if (modbusRt) modbusRt->stopPolling();
+        auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+        if (fanucRt) fanucRt->stopPolling();
     }
 
     // Stop mock server if running
@@ -153,6 +173,10 @@ void MainWindow::switchProtocol(int index)
         m_protocol = new ModbusProtocol(this);
         m_widgetFactory = new ModbusWidgetFactory;
         break;
+    case 2:
+        m_protocol = new FanucProtocol(this);
+        m_widgetFactory = new FanucWidgetFactory;
+        break;
     default:
         m_protocol = new Gsk988Protocol(this);
         m_widgetFactory = new Gsk988WidgetFactory;
@@ -176,6 +200,9 @@ void MainWindow::switchProtocol(int index)
     m_tabWidget->insertTab(1, m_commandTab, "发送指令");
     m_tabWidget->insertTab(2, m_parseTab, "数据解析");
 
+    // Default to realtime data page
+    m_tabWidget->setCurrentIndex(0);
+
     // Wire protocol-specific widget signals
     setupProtocolConnections();
 }
@@ -189,11 +216,19 @@ void MainWindow::switchTransport(int index)
         m_transport->disconnectFromHost();
     }
 
-    // Remove old transport config widget from toolbar
-    if (m_transportConfigWidget) {
-        m_transportConfigWidget->deleteLater();
-        m_transportConfigWidget = nullptr;
+    // Remove old transport config widget from toolbar and remember position
+    QAction* insertBefore = nullptr;
+    if (m_transportConfigAction && m_toolbar) {
+        QList<QAction*> actions = m_toolbar->actions();
+        int idx = actions.indexOf(m_transportConfigAction);
+        if (idx >= 0 && idx + 1 < actions.size()) {
+            insertBefore = actions.at(idx + 1);
+        }
+        m_toolbar->removeAction(m_transportConfigAction);
+        m_transportConfigAction = nullptr;
     }
+    delete m_transportConfigWidget;
+    m_transportConfigWidget = nullptr;
 
     // Delete old transport
     delete m_transport;
@@ -208,6 +243,13 @@ void MainWindow::switchTransport(int index)
 
     // Get config widget from transport and insert into toolbar
     m_transportConfigWidget = m_transport->createConfigWidget();
+    if (m_toolbar) {
+        if (insertBefore) {
+            m_transportConfigAction = m_toolbar->insertWidget(insertBefore, m_transportConfigWidget);
+        } else {
+            m_transportConfigAction = m_toolbar->addWidget(m_transportConfigWidget);
+        }
+    }
 
     // Connect transport signals
     connect(m_transport, &ITransport::connected, this, [this]() {
@@ -225,11 +267,17 @@ void MainWindow::switchTransport(int index)
             m_transport->send(permFrame);
             auto cmd = m_protocol->commandDef(0x0A);
             m_logTab->logFrame(permFrame, true, QString("[0x0A] %1").arg(cmd.name));
-        } else {
+        } else if (m_protocolCombo->currentIndex() == 1) {
             // Modbus TCP: start polling immediately
             m_needStartPolling = false;
             auto* modbusRt = qobject_cast<ModbusRealtimeWidget*>(m_realtimeTab);
             if (modbusRt) modbusRt->startPolling();
+        } else if (m_protocolCombo->currentIndex() == 2) {
+            // Fanuc FOCAS: send handshake first, polling starts after handshake response
+            m_needStartPolling = true;
+            QByteArray handshakeFrame = qobject_cast<FanucProtocol*>(m_protocol)->buildHandshake();
+            m_transport->send(handshakeFrame);
+            m_logTab->logFrame(handshakeFrame, true, "[握手] Fanuc FOCAS");
         }
     });
 
@@ -250,6 +298,11 @@ void MainWindow::switchTransport(int index)
         if (modbusRt) {
             modbusRt->stopPolling();
             modbusRt->clearData();
+        }
+        auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+        if (fanucRt) {
+            fanucRt->stopPolling();
+            fanucRt->clearData();
         }
     });
 
@@ -353,6 +406,50 @@ void MainWindow::setupProtocolConnections()
             m_timeoutTimer->start();
         });
     }
+
+    // Fanuc realtime widget
+    auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+    if (fanucRt) {
+        connect(fanucRt, &FanucRealtimeWidget::pollRequest,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            auto* mrt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+            if (mrt) mrt->appendHexDisplay(frame, true);
+
+            m_timeoutTimer->start();
+        });
+    }
+
+    // Fanuc command widget
+    auto* fanucCmd = qobject_cast<FanucCommandWidget*>(m_commandTab);
+    if (fanucCmd) {
+        connect(fanucCmd, &FanucCommandWidget::sendCommand,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_waitingManualResponse = true;
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            m_timeoutTimer->start();
+        });
+    }
 }
 
 void MainWindow::onDataReceived(const QByteArray& rawData)
@@ -394,10 +491,18 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
             modbusRt->updateData(resp);
         }
 
+        // Route to Fanuc realtime tab
+        auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+        if (fanucRt) {
+            fanucRt->appendHexDisplay(frame, false);
+            fanucRt->updateData(resp);
+        }
+
         // Start polling after receiving the permission (0x0A) response
         if (m_needStartPolling) {
             m_needStartPolling = false;
             if (rt) rt->startPolling();
+            if (fanucRt) fanucRt->startPolling();
         }
 
         // Only show in command tab if this was a manual send
@@ -412,6 +517,11 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
             if (modbusCmdW) {
                 QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
                 modbusCmdW->showResponse(resp, interp);
+            }
+            auto* fanucCmdW = qobject_cast<FanucCommandWidget*>(m_commandTab);
+            if (fanucCmdW) {
+                QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
+                fanucCmdW->showResponse(resp, interp);
             }
         }
     }
@@ -431,6 +541,9 @@ void MainWindow::onResponseTimeout()
 
     auto* modbusRt = qobject_cast<ModbusRealtimeWidget*>(m_realtimeTab);
     if (modbusRt) modbusRt->updateData(dummy);
+
+    auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+    if (fanucRt) fanucRt->updateData(dummy);
 }
 
 void MainWindow::onConnectClicked()
@@ -441,6 +554,8 @@ void MainWindow::onConnectClicked()
         if (rt) rt->stopPolling();
         auto* modbusRt = qobject_cast<ModbusRealtimeWidget*>(m_realtimeTab);
         if (modbusRt) modbusRt->stopPolling();
+        auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
+        if (fanucRt) fanucRt->stopPolling();
         if (m_mockServer) m_mockServer->stop();
         m_transport->disconnectFromHost();
         return;

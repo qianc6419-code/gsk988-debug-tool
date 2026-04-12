@@ -66,9 +66,11 @@ void ModbusCommandWidget::setupUI()
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     connect(m_table, &QTableWidget::currentCellChanged, this, [this](int row) {
         if (row < 0 || row >= m_commands.size()) return;
-        // Highlight selected row
-        for (int c = 0; c < m_table->columnCount(); ++c)
-            m_table->item(row, c)->setSelected(true);
+        // Highlight selected row (skip columns that use cell widgets, no QTableWidgetItem)
+        for (int c = 0; c < m_table->columnCount(); ++c) {
+            if (auto* it = m_table->item(row, c))
+                it->setSelected(true);
+        }
     });
 
     leftLayout->addWidget(m_table);
@@ -81,7 +83,7 @@ void ModbusCommandWidget::setupUI()
 
     // Unit ID
     auto* unitBar = new QHBoxLayout;
-    unitBar->addWidget(new QLabel("Unit ID:"));
+    unitBar->addWidget(new QLabel("从站ID:"));
     m_unitIdSpin = new QSpinBox;
     m_unitIdSpin->setRange(1, 247);
     m_unitIdSpin->setValue(1);
@@ -103,7 +105,7 @@ void ModbusCommandWidget::setupUI()
     m_writeQtyEdit = new QLineEdit;
     m_writeQtyEdit->setPlaceholderText("1");
     m_valueEdit = new QLineEdit;
-    m_valueEdit->setPlaceholderText("hex values, e.g. 00 0A 01 72");
+    m_valueEdit->setPlaceholderText("HEX值, 如 00 0A 01 72");
 
     paramLayout->addRow("起始地址:", m_addrEdit);
     paramLayout->addRow("数量:", m_qtyEdit);

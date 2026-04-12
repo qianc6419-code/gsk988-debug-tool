@@ -1,5 +1,5 @@
-#include "commandwidget.h"
-#include "protocol/gsk988protocol.h"
+#include "gsk988commandwidget.h"
+#include "gsk988protocol.h"
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QHeaderView>
@@ -24,15 +24,15 @@ static QMap<QString, QString> categoryColors()
     };
 }
 
-CommandWidget::CommandWidget(QWidget* parent)
+Gsk988CommandWidget::Gsk988CommandWidget(QWidget* parent)
     : QWidget(parent)
-    , m_commands(Gsk988Protocol::allCommands())
+    , m_commands(Gsk988Protocol::allCommandsRaw())
 {
     setupUI();
     populateTable();
 }
 
-void CommandWidget::setupUI()
+void Gsk988CommandWidget::setupUI()
 {
     auto* mainLayout = new QVBoxLayout(this);
 
@@ -40,7 +40,7 @@ void CommandWidget::setupUI()
     auto* filterBar = new QHBoxLayout;
     m_searchEdit = new QLineEdit;
     m_searchEdit->setPlaceholderText("搜索命令名/命令码...");
-    connect(m_searchEdit, &QLineEdit::textChanged, this, &CommandWidget::applyFilter);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, &Gsk988CommandWidget::applyFilter);
 
     m_categoryCombo = new QComboBox;
     m_categoryCombo->addItem("全部类别");
@@ -79,7 +79,7 @@ void CommandWidget::setupUI()
     mainLayout->addWidget(m_resultDisplay, 1);
 }
 
-void CommandWidget::populateTable()
+void Gsk988CommandWidget::populateTable()
 {
     auto colors = categoryColors();
     m_table->setRowCount(static_cast<int>(m_commands.size()));
@@ -162,7 +162,7 @@ void CommandWidget::populateTable()
     }
 }
 
-void CommandWidget::applyFilter(const QString& text)
+void Gsk988CommandWidget::applyFilter(const QString& text)
 {
     QString category = m_categoryCombo->currentText();
     if (category == "全部类别") category.clear();
@@ -179,18 +179,15 @@ void CommandWidget::applyFilter(const QString& text)
     }
 }
 
-void CommandWidget::showResponse(const ParsedResponse& resp, const QString& interpretation)
+void Gsk988CommandWidget::showResponse(const ParsedResponse& resp, const QString& interpretation)
 {
-    auto cmd = Gsk988Protocol::commandDef(resp.cmdCode);
+    auto cmd = Gsk988Protocol::commandDefRaw(resp.cmdCode);
 
     QString html;
     html += QString("<b>[%1] %2</b><br>").arg(cmd.name).arg(resp.cmdCode, 2, 16, QChar('0')).toUpper();
 
     if (resp.isValid) {
-        html += QString("<span style='color:green;'>成功</span> (错误码: 0x%1)<br>")
-                    .arg(resp.errorCode, 4, 16, QChar('0'));
-    } else {
-        html += QString("<span style='color:red;'>%1</span><br>").arg(resp.errorString);
+        html += QString("<span style='color:green;'>成功</span><br>");
     }
 
     html += QString("<br>%1").arg(interpretation);

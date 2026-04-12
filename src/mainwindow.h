@@ -20,6 +20,8 @@ class Gsk988RealtimeWidget;
 class Gsk988CommandWidget;
 class ModbusRealtimeWidget;
 class ModbusCommandWidget;
+class FanucRealtimeWidget;
+class FanucCommandWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -53,6 +55,10 @@ private:
 
     // Transport config widget (owned by toolbar layout)
     QWidget* m_transportConfigWidget = nullptr;
+    QAction* m_transportConfigAction = nullptr;
+
+    // Toolbar
+    QToolBar* m_toolbar = nullptr;
 
     // Toolbar controls
     QComboBox* m_protocolCombo;

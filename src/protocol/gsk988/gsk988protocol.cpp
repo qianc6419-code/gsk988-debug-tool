@@ -1,5 +1,5 @@
 #include "gsk988protocol.h"
-#include "framebuilder.h"
+#include "gsk988framebuilder.h"
 #include <QDataStream>
 #include <QtEndian>
 #include <cstring>
@@ -53,9 +53,9 @@ static QByteArray floatToBytes(float f)
 
 // ========== Command Definitions ==========
 
-static QVector<CommandDef> buildCommandTable()
+static QVector<Gsk988CommandDef> buildCommandTable()
 {
-    QVector<CommandDef> cmds;
+    QVector<Gsk988CommandDef> cmds;
 
     auto add = [&](quint8 code, const QString& name, const QString& cat,
                    const QString& reqP, const QString& respD) {
@@ -132,15 +132,17 @@ static QVector<CommandDef> buildCommandTable()
     return cmds;
 }
 
-QVector<CommandDef> Gsk988Protocol::allCommands()
+// ========== Raw Command Table (internal) ==========
+
+QVector<Gsk988CommandDef> Gsk988Protocol::allCommandsRaw()
 {
-    static QVector<CommandDef> cmds = buildCommandTable();
+    static QVector<Gsk988CommandDef> cmds = buildCommandTable();
     return cmds;
 }
 
-CommandDef Gsk988Protocol::commandDef(quint8 cmdCode)
+Gsk988CommandDef Gsk988Protocol::commandDefRaw(quint8 cmdCode)
 {
-    auto cmds = allCommands();
+    auto cmds = allCommandsRaw();
     for (const auto& c : cmds) {
         if (c.cmdCode == cmdCode)
             return c;
@@ -148,19 +150,52 @@ CommandDef Gsk988Protocol::commandDef(quint8 cmdCode)
     return {cmdCode, "未知命令", "其他", "", ""};
 }
 
-// ========== Build Request ==========
+// ========== IProtocol: allCommands / commandDef ==========
+
+QVector<ProtocolCommand> Gsk988Protocol::allCommands() const
+{
+    QVector<ProtocolCommand> result;
+    auto rawCmds = allCommandsRaw();
+    result.reserve(rawCmds.size());
+    for (const auto& c : rawCmds) {
+        ProtocolCommand pc;
+        pc.cmdCode = c.cmdCode;
+        pc.name = c.name;
+        pc.category = c.category;
+        pc.paramDesc = c.requestParams;
+        pc.respDesc = c.responseDesc;
+        result.append(pc);
+    }
+    return result;
+}
+
+ProtocolCommand Gsk988Protocol::commandDef(quint8 cmdCode) const
+{
+    Gsk988CommandDef raw = commandDefRaw(cmdCode);
+    ProtocolCommand pc;
+    pc.cmdCode = raw.cmdCode;
+    pc.name = raw.name;
+    pc.category = raw.category;
+    pc.paramDesc = raw.requestParams;
+    pc.respDesc = raw.responseDesc;
+    return pc;
+}
+
+// ========== Constructor ==========
 
 Gsk988Protocol::Gsk988Protocol(QObject* parent)
-    : QObject(parent)
+    : IProtocol(parent)
 {
 }
+
+// ========== Build Request ==========
 
 QByteArray Gsk988Protocol::buildRequest(quint8 cmdCode, const QByteArray& params)
 {
     QByteArray dataField;
     dataField.append(static_cast<char>(cmdCode));
     dataField.append(params);
-    return FrameBuilder::buildRequestFrame(dataField);
+    return Gsk988FrameBuilder::buildRequestFrame(dataField);
 }
 
 // ========== Parse Response ==========
@@ -169,9 +204,8 @@ ParsedResponse Gsk988Protocol::parseResponse(const QByteArray& frame)
 {
     ParsedResponse result;
 
-    if (!FrameBuilder::validateFrame(frame)) {
+    if (!Gsk988FrameBuilder::validateFrame(frame)) {
         result.isValid = false;
-        result.errorString = "帧校验失败";
         return result;
     }
 
@@ -180,27 +214,30 @@ ParsedResponse Gsk988Protocol::parseResponse(const QByteArray& frame)
 
     if (frame.size() < dataOffset + 3) {
         result.isValid = false;
-        result.errorString = "帧数据域过短";
         return result;
     }
 
     result.cmdCode = static_cast<quint8>(frame[dataOffset]);
-    result.errorCode = readU16(frame, dataOffset + 1);
 
-    if (result.errorCode == 0) {
-        result.isValid = true;
-    } else {
-        result.isValid = false;
-        result.errorString = QString("错误码: 0x%1").arg(result.errorCode, 4, 16, QChar('0'));
-    }
+    quint16 errorCode = readU16(frame, dataOffset + 1);
+    result.isValid = (errorCode == 0);
 
+    // rawData = payload after cmdCode + errorCode
     result.rawData = frame.mid(dataOffset + 3);
+
     return result;
+}
+
+// ========== Extract Frame ==========
+
+QByteArray Gsk988Protocol::extractFrame(QByteArray& buffer)
+{
+    return Gsk988FrameBuilder::extractFrame(buffer);
 }
 
 // ========== Interpret Data ==========
 
-QString Gsk988Protocol::interpretData(quint8 cmdCode, const QByteArray& data)
+QString Gsk988Protocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
 {
     if (data.isEmpty())
         return "(无附加数据)";
@@ -320,7 +357,12 @@ QString Gsk988Protocol::interpretData(quint8 cmdCode, const QByteArray& data)
     return QString("(数据长度: %1字节)").arg(data.size());
 }
 
-// ========== Mock Response Data ==========
+QString Gsk988Protocol::interpretData(quint8 cmdCode, const QByteArray& data) const
+{
+    return interpretDataRaw(cmdCode, data);
+}
+
+// ========== Mock Response Data (internal) ==========
 
 QByteArray Gsk988Protocol::mockResponseData(quint8 cmdCode, const QByteArray& requestData)
 {
@@ -552,4 +594,12 @@ QByteArray Gsk988Protocol::mockResponseData(quint8 cmdCode, const QByteArray& re
     }
 
     return data;
+}
+
+// ========== Mock Response (IProtocol — returns complete frame) ==========
+
+QByteArray Gsk988Protocol::mockResponse(quint8 cmdCode, const QByteArray& requestData) const
+{
+    QByteArray responseData = mockResponseData(cmdCode, requestData);
+    return Gsk988FrameBuilder::buildResponseFrame(responseData);
 }

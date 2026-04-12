@@ -1,9 +1,9 @@
-#ifndef FRAMEBUILDER_H
-#define FRAMEBUILDER_H
+#ifndef GSK988FRAMEBUILDER_H
+#define GSK988FRAMEBUILDER_H
 
 #include <QByteArray>
 
-class FrameBuilder
+class Gsk988FrameBuilder
 {
 public:
     // Build a request frame with the given data field
@@ -24,4 +24,4 @@ public:
     static const QByteArray RESPONSE_ID;
 };
 
-#endif // FRAMEBUILDER_H
+#endif // GSK988FRAMEBUILDER_H

@@ -1,11 +1,10 @@
 #include "mockserver.h"
-#include "protocol/gsk988protocol.h"
-#include "protocol/framebuilder.h"
+#include "protocol/iprotocol.h"
 
-MockServer::MockServer(QObject* parent)
+MockServer::MockServer(IProtocol* protocol, QObject* parent)
     : QObject(parent)
     , m_server(new QTcpServer(this))
-    , m_protocol(new Gsk988Protocol(this))
+    , m_protocol(protocol)
 {
     connect(m_server, &QTcpServer::newConnection, this, &MockServer::onNewConnection);
 }
@@ -17,9 +16,7 @@ MockServer::~MockServer()
 
 bool MockServer::start(quint16 port)
 {
-    if (m_server->isListening())
-        return true;
-
+    if (m_server->isListening()) return true;
     bool ok = m_server->listen(QHostAddress::LocalHost, port);
     if (ok) {
         emit logMessage(QString("Mock服务器已启动，端口: %1").arg(port));
@@ -39,27 +36,18 @@ void MockServer::stop()
     m_server->close();
 }
 
-bool MockServer::isRunning() const
-{
-    return m_server->isListening();
-}
-
-quint16 MockServer::serverPort() const
-{
-    return m_server->serverPort();
-}
+bool MockServer::isRunning() const { return m_server->isListening(); }
+quint16 MockServer::serverPort() const { return m_server->serverPort(); }
 
 void MockServer::onNewConnection()
 {
     QTcpSocket* client = m_server->nextPendingConnection();
     m_clients.append(client);
-
     connect(client, &QTcpSocket::readyRead, this, &MockServer::onClientReadyRead);
     connect(client, &QTcpSocket::disconnected, this, [this, client]() {
         m_clients.removeOne(client);
         client->deleteLater();
     });
-
     emit logMessage(QString("Mock客户端已连接: %1:%2")
                         .arg(client->peerAddress().toString())
                         .arg(client->peerPort()));
@@ -72,27 +60,15 @@ void MockServer::onClientReadyRead()
 
     QByteArray buffer = client->readAll();
 
-    // Extract and process complete frames
     QByteArray frame;
-    while (!(frame = FrameBuilder::extractFrame(buffer)).isEmpty()) {
-        // Parse request: skip head(2) + length(2) + request_id(8) = 12
-        if (frame.size() < 13) continue;
+    while (!(frame = m_protocol->extractFrame(buffer)).isEmpty()) {
+        ParsedResponse resp = m_protocol->parseResponse(frame);
 
-        quint8 cmdCode = static_cast<quint8>(frame[12]);
-        QByteArray requestData = frame.mid(13);
-
-        emit logMessage(QString("Mock收到请求: 命令码 0x%1")
-                            .arg(cmdCode, 2, 16, QChar('0')).toUpper());
-
-        // Generate mock response
-        QByteArray respData = Gsk988Protocol::mockResponseData(cmdCode, requestData);
-        QByteArray respFrame = FrameBuilder::buildResponseFrame(respData);
-
+        QByteArray respFrame = m_protocol->mockResponse(resp.cmdCode, resp.rawData);
         client->write(respFrame);
         client->flush();
 
-        emit logMessage(QString("Mock发送响应: 命令码 0x%1, 数据长度 %2字节")
-                            .arg(cmdCode, 2, 16, QChar('0')).toUpper()
-                            .arg(respData.size()));
+        emit logMessage(QString("Mock响应: 命令码 0x%1")
+                            .arg(resp.cmdCode, 2, 16, QChar('0')).toUpper());
     }
 }

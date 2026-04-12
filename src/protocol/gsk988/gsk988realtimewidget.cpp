@@ -1,5 +1,5 @@
-#include "realtimewidget.h"
-#include "protocol/gsk988protocol.h"
+#include "gsk988realtimewidget.h"
+#include "gsk988protocol.h"
 #include <QGridLayout>
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -8,7 +8,7 @@
 #include <cstring>
 
 // ========== Poll Items ==========
-const RealtimeWidget::PollItem RealtimeWidget::pollItems[] = {
+const Gsk988RealtimeWidget::PollItem Gsk988RealtimeWidget::pollItems[] = {
     // Device status
     {0x10, QByteArray(1, '\0')},            // 0:  运行模式
     {0x11, QByteArray(1, '\0')},            // 1:  运行状态
@@ -48,7 +48,7 @@ const RealtimeWidget::PollItem RealtimeWidget::pollItems[] = {
 
 // ========== Constructor ==========
 
-RealtimeWidget::RealtimeWidget(QWidget* parent)
+Gsk988RealtimeWidget::Gsk988RealtimeWidget(QWidget* parent)
     : QWidget(parent)
     , m_pollIndex(0)
     , m_pollCount(PI_COUNT)
@@ -107,19 +107,19 @@ static float readFloatVal(const QByteArray& ba, int offset)
     return f;
 }
 
-void RealtimeWidget::setLabelOK(QLabel* label, const QString& text)
+void Gsk988RealtimeWidget::setLabelOK(QLabel* label, const QString& text)
 {
     label->setText(text);
     label->setStyleSheet("");
 }
 
-void RealtimeWidget::setLabelError(QLabel* label, const QString& err)
+void Gsk988RealtimeWidget::setLabelError(QLabel* label, const QString& /*err*/)
 {
-    label->setText(err);
-    label->setStyleSheet("color: red;");
+    label->setText("--");
+    label->setStyleSheet("");
 }
 
-void RealtimeWidget::resetLabel(QLabel* label)
+void Gsk988RealtimeWidget::resetLabel(QLabel* label)
 {
     label->setText("--");
     label->setStyleSheet("");
@@ -140,7 +140,7 @@ static QGroupBox* makeCoordCard(const QString& title, QLabel* labels[3])
     return card;
 }
 
-void RealtimeWidget::setupUI()
+void Gsk988RealtimeWidget::setupUI()
 {
     auto* mainLayout = new QVBoxLayout(this);
 
@@ -306,7 +306,7 @@ void RealtimeWidget::setupUI()
 
 // ========== Cycle Polling ==========
 
-void RealtimeWidget::startCycle()
+void Gsk988RealtimeWidget::startCycle()
 {
     if (m_cycleActive) return; // already cycling
     m_cycleActive = true;
@@ -337,7 +337,7 @@ static QString runStatusStr(quint32 v)
     }
 }
 
-void RealtimeWidget::updateData(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateData(const ParsedResponse& resp)
 {
     // Advance cycle if active
     if (m_cycleActive) {
@@ -377,13 +377,13 @@ void RealtimeWidget::updateData(const ParsedResponse& resp)
 
 // ========== Device Card ==========
 
-void RealtimeWidget::updateDeviceCard(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateDeviceCard(const ParsedResponse& resp)
 {
     if (!resp.isValid) {
         switch (resp.cmdCode) {
-        case 0x10: setLabelError(m_runModeLabel, resp.errorString); break;
-        case 0x11: setLabelError(m_runStatusLabel, resp.errorString); break;
-        case 0x22: setLabelError(m_pauseLabel, resp.errorString); break;
+        case 0x10: setLabelError(m_runModeLabel, QString()); break;
+        case 0x11: setLabelError(m_runStatusLabel, QString()); break;
+        case 0x22: setLabelError(m_pauseLabel, QString()); break;
         }
         return;
     }
@@ -407,7 +407,7 @@ void RealtimeWidget::updateDeviceCard(const ParsedResponse& resp)
 
 // ========== Speed Card (0x1A) ==========
 
-void RealtimeWidget::updateSpeedCard(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateSpeedCard(const ParsedResponse& resp)
 {
     int prevIdx = m_pollIndex > 0 ? m_pollIndex - 1 : m_pollCount - 1;
 
@@ -429,7 +429,7 @@ void RealtimeWidget::updateSpeedCard(const ParsedResponse& resp)
     }
 
     if (!resp.isValid) {
-        setLabelError(target, resp.errorString);
+        setLabelError(target, QString());
         return;
     }
 
@@ -444,7 +444,7 @@ void RealtimeWidget::updateSpeedCard(const ParsedResponse& resp)
 
 // ========== Coordinate Card (0x15) ==========
 
-void RealtimeWidget::updateCoordCard(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateCoordCard(const ParsedResponse& resp)
 {
     int prevIdx = m_pollIndex > 0 ? m_pollIndex - 1 : m_pollCount - 1;
 
@@ -458,7 +458,7 @@ void RealtimeWidget::updateCoordCard(const ParsedResponse& resp)
     }
 
     if (!resp.isValid) {
-        setLabelError(targetLabels[0], resp.errorString);
+        setLabelError(targetLabels[0], QString());
         resetLabel(targetLabels[1]);
         resetLabel(targetLabels[2]);
         return;
@@ -477,14 +477,14 @@ void RealtimeWidget::updateCoordCard(const ParsedResponse& resp)
 
 // ========== Machining Card ==========
 
-void RealtimeWidget::updateMachiningCard(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateMachiningCard(const ParsedResponse& resp)
 {
     if (!resp.isValid) {
         switch (resp.cmdCode) {
-        case 0x16: setLabelError(m_pieceCountLabel, resp.errorString); break;
-        case 0x17: setLabelError(m_toolNoLabel, resp.errorString); break;
-        case 0x18: setLabelError(m_runTimeLabel, resp.errorString); break;
-        case 0x19: setLabelError(m_cutTimeLabel, resp.errorString); break;
+        case 0x16: setLabelError(m_pieceCountLabel, QString()); break;
+        case 0x17: setLabelError(m_toolNoLabel, QString()); break;
+        case 0x18: setLabelError(m_runTimeLabel, QString()); break;
+        case 0x19: setLabelError(m_cutTimeLabel, QString()); break;
         }
         return;
     }
@@ -517,15 +517,15 @@ void RealtimeWidget::updateMachiningCard(const ParsedResponse& resp)
 
 // ========== Program Card ==========
 
-void RealtimeWidget::updateProgramCard(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateProgramCard(const ParsedResponse& resp)
 {
     if (!resp.isValid) {
         switch (resp.cmdCode) {
-        case 0x12: setLabelError(m_programNameLabel, resp.errorString); break;
-        case 0x1D: setLabelError(m_segmentLabel, resp.errorString); break;
-        case 0x23: setLabelError(m_execLineLabel, resp.errorString); break;
-        case 0x1B: setLabelError(m_gModalLabel, resp.errorString); break;
-        case 0x1C: setLabelError(m_mModalLabel, resp.errorString); break;
+        case 0x12: setLabelError(m_programNameLabel, QString()); break;
+        case 0x1D: setLabelError(m_segmentLabel, QString()); break;
+        case 0x23: setLabelError(m_execLineLabel, QString()); break;
+        case 0x1B: setLabelError(m_gModalLabel, QString()); break;
+        case 0x1C: setLabelError(m_mModalLabel, QString()); break;
         }
         return;
     }
@@ -574,11 +574,11 @@ void RealtimeWidget::updateProgramCard(const ParsedResponse& resp)
 
 // ========== Alarm Card ==========
 
-void RealtimeWidget::updateAlarmCard(const ParsedResponse& resp)
+void Gsk988RealtimeWidget::updateAlarmCard(const ParsedResponse& resp)
 {
     if (!resp.isValid || resp.cmdCode != 0x81) {
         if (resp.cmdCode == 0x81 && !resp.isValid) {
-            setLabelError(m_errorCountLabel, resp.errorString);
+            setLabelError(m_errorCountLabel, QString());
             resetLabel(m_warnCountLabel);
         }
         return;
@@ -591,7 +591,7 @@ void RealtimeWidget::updateAlarmCard(const ParsedResponse& resp)
 
 // ========== HEX Display ==========
 
-void RealtimeWidget::appendHexDisplay(const QByteArray& data, bool isSend)
+void Gsk988RealtimeWidget::appendHexDisplay(const QByteArray& data, bool isSend)
 {
     QStringList hex;
     for (int i = 0; i < data.size(); ++i)
@@ -603,7 +603,7 @@ void RealtimeWidget::appendHexDisplay(const QByteArray& data, bool isSend)
 
 // ========== Polling Control ==========
 
-void RealtimeWidget::startPolling()
+void Gsk988RealtimeWidget::startPolling()
 {
     m_pollIndex = 0;
     m_cycleActive = false;
@@ -612,7 +612,7 @@ void RealtimeWidget::startPolling()
     startCycle();
 }
 
-void RealtimeWidget::stopPolling()
+void Gsk988RealtimeWidget::stopPolling()
 {
     m_cycleDelayTimer->stop();
     m_cycleActive = false;
@@ -620,7 +620,7 @@ void RealtimeWidget::stopPolling()
 
 // ========== Clear Data ==========
 
-void RealtimeWidget::clearData()
+void Gsk988RealtimeWidget::clearData()
 {
     resetLabel(m_runModeLabel);
     resetLabel(m_runStatusLabel);
