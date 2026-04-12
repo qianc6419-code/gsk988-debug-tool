@@ -31,6 +31,20 @@ public:
     static QVector<bool>    decodeCoils(const QByteArray& data, int offset, int count);
     static QVector<quint16> decodeRegisters(const QByteArray& data, int offset, int count);
 
+    // Byte order aware decoding
+    enum ByteOrder { ABCD, BADC, CDAB, DCBA };
+
+    static qint16  decodeInt16(const QByteArray& data, int offset, ByteOrder order);
+    static quint16 decodeUInt16BO(const QByteArray& data, int offset, ByteOrder order);
+    static qint32  decodeInt32(const QByteArray& data, int offset, ByteOrder order);
+    static quint32 decodeUInt32BO(const QByteArray& data, int offset, ByteOrder order);
+    static qint64  decodeInt64(const QByteArray& data, int offset, ByteOrder order);
+    static quint64 decodeUInt64(const QByteArray& data, int offset, ByteOrder order);
+    static float   decodeFloat32(const QByteArray& data, int offset, ByteOrder order);
+    static double  decodeDouble(const QByteArray& data, int offset, ByteOrder order);
+    static qint8   decodeInt8(const QByteArray& data, int offset);
+    static quint8  decodeUInt8(const QByteArray& data, int offset);
+
     // Check if function code indicates an exception response
     static bool isException(quint8 funcCode);
 };
