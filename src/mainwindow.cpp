@@ -384,6 +384,31 @@ void MainWindow::setupProtocolConnections()
 
             m_timeoutTimer->start();
         });
+
+        connect(modbusRt, &ModbusRealtimeWidget::singleReadRequest,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_waitingManualResponse = true;
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2 [单次读取]")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            auto* mrt = qobject_cast<ModbusRealtimeWidget*>(m_realtimeTab);
+            if (mrt) mrt->appendHexDisplay(frame, true);
+
+            m_timeoutTimer->start();
+        });
+
+        connect(modbusRt, &ModbusRealtimeWidget::timeoutChanged,
+                this, [this](int ms) {
+            m_timeoutTimer->setInterval(ms);
+        });
     }
 
     // Modbus command widget
@@ -517,6 +542,12 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
             if (modbusCmdW) {
                 QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
                 modbusCmdW->showResponse(resp, interp);
+            }
+            // Route single read result to Modbus realtime widget
+            auto* modbusRtForSingle = qobject_cast<ModbusRealtimeWidget*>(m_realtimeTab);
+            if (modbusRtForSingle) {
+                QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
+                modbusRtForSingle->showSingleReadResult(resp, interp);
             }
             auto* fanucCmdW = qobject_cast<FanucCommandWidget*>(m_commandTab);
             if (fanucCmdW) {
