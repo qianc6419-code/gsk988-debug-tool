@@ -41,6 +41,8 @@ private:
     QLineEdit* m_writeAddrEdit;
     QLineEdit* m_writeQtyEdit;
     QLineEdit* m_valueEdit;
+    QComboBox* m_dataTypeCombo;
+    QComboBox* m_byteOrderCombo;
 
     QVector<ModbusCommandDef> m_commands;
 };

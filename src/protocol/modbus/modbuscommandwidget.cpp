@@ -113,6 +113,31 @@ void ModbusCommandWidget::setupUI()
     paramLayout->addRow("写数量:", m_writeQtyEdit);
     paramLayout->addRow("值:", m_valueEdit);
 
+    m_dataTypeCombo = new QComboBox;
+    m_dataTypeCombo->addItem("(自动)", -1);
+    m_dataTypeCombo->addItem("UINT16", 0);
+    m_dataTypeCombo->addItem("INT16", 1);
+    m_dataTypeCombo->addItem("UINT32", 2);
+    m_dataTypeCombo->addItem("INT32", 3);
+    m_dataTypeCombo->addItem("FLOAT32", 4);
+    m_dataTypeCombo->addItem("BOOL", 5);
+    m_dataTypeCombo->addItem("BYTE", 6);
+    m_dataTypeCombo->addItem("INT8", 7);
+    m_dataTypeCombo->addItem("UINT64", 8);
+    m_dataTypeCombo->addItem("INT64", 9);
+    m_dataTypeCombo->addItem("DOUBLE", 10);
+    m_dataTypeCombo->addItem("STRING", 11);
+    paramLayout->addRow("数据类型:", m_dataTypeCombo);
+    m_dataTypeCombo->setVisible(false);
+
+    m_byteOrderCombo = new QComboBox;
+    m_byteOrderCombo->addItem("AB CD (大端)", 0);
+    m_byteOrderCombo->addItem("BA DC", 1);
+    m_byteOrderCombo->addItem("CD AB", 2);
+    m_byteOrderCombo->addItem("DC BA (小端)", 3);
+    paramLayout->addRow("字节序:", m_byteOrderCombo);
+    m_byteOrderCombo->setVisible(false);
+
     rightLayout->addWidget(m_paramPanel);
 
     // Send button
@@ -306,6 +331,10 @@ void ModbusCommandWidget::setupUI()
                 m_writeQtyEdit->setVisible(false);
                 m_valueEdit->setVisible(needsValue);
 
+                bool needsDataType = (cmd.cmdCode == 0x03 || cmd.cmdCode == 0x04);
+                m_dataTypeCombo->setVisible(needsDataType);
+                m_byteOrderCombo->setVisible(needsDataType);
+
                 // Update form labels
                 auto* formLayout = qobject_cast<QFormLayout*>(m_paramPanel->layout());
                 if (formLayout) {
@@ -326,6 +355,10 @@ void ModbusCommandWidget::setupUI()
                                 visible = false;
                             else if (labelItem->widget() == formLayout->labelForField(m_valueEdit))
                                 visible = needsValue;
+                            else if (labelItem->widget() == formLayout->labelForField(m_dataTypeCombo))
+                                visible = (cmd.cmdCode == 0x03 || cmd.cmdCode == 0x04);
+                            else if (labelItem->widget() == formLayout->labelForField(m_byteOrderCombo))
+                                visible = (cmd.cmdCode == 0x03 || cmd.cmdCode == 0x04);
                             labelItem->widget()->setVisible(visible);
                         }
                     }
