@@ -39,6 +39,7 @@ public:
 
 private:
     bool m_handshakeDone;
+    quint8 m_lastRequestCmdCode;  // stored by buildRequest/buildHandshake, used by mock server
 };
 
 #endif // FANUCPROTOCOL_H

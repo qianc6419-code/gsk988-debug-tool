@@ -115,6 +115,7 @@ ProtocolCommand FanucProtocol::commandDef(quint8 cmdCode) const
 FanucProtocol::FanucProtocol(QObject* parent)
     : IProtocol(parent)
     , m_handshakeDone(false)
+    , m_lastRequestCmdCode(0)
 {
 }
 
@@ -123,6 +124,7 @@ FanucProtocol::FanucProtocol(QObject* parent)
 QByteArray FanucProtocol::buildHandshake()
 {
     m_handshakeDone = true;
+    m_lastRequestCmdCode = 0xFF; // special code for handshake
     return FanucFrameBuilder::buildHandshake();
 }
 
@@ -131,6 +133,7 @@ QByteArray FanucProtocol::buildHandshake()
 QByteArray FanucProtocol::buildRequest(quint8 cmdCode, const QByteArray& params)
 {
     using FB = FanucFrameBuilder;
+    m_lastRequestCmdCode = cmdCode;
 
     // Helper lambda: wrap a single pre-built block into a complete read frame
     auto wrapBlock = [](const QByteArray& block) -> QByteArray {
@@ -320,30 +323,40 @@ QByteArray FanucProtocol::extractFrame(QByteArray& buffer)
 ParsedResponse FanucProtocol::parseResponse(const QByteArray& frame)
 {
     ParsedResponse result;
+    result.cmdCode = 0;
+    result.isValid = false;
 
-    if (frame.size() < 10) {
-        result.isValid = false;
+    if (frame.size() < 10)
         return result;
-    }
 
-    if (!FanucFrameBuilder::validateHeader(frame)) {
-        result.isValid = false;
+    if (!FanucFrameBuilder::validateHeader(frame))
         return result;
-    }
 
-    // Verify response function code: 00 01 21 02
+    QByteArray funcCode = frame.mid(4, 4);
     using FB = FanucFrameBuilder;
-    if (frame.mid(4, 4) != FB::FUNC_RESPONSE) {
-        result.isValid = false;
+
+    // Response function codes (seen by client receiving mock/real device data)
+    static const QByteArray FUNC_HANDSHAKE_RESP("\x00\x01\x01\x02", 4);
+    bool isResponse = (funcCode == FB::FUNC_RESPONSE) ||
+                      (funcCode == FUNC_HANDSHAKE_RESP);
+
+    // Request function codes (seen by mock server receiving client requests)
+    static const QByteArray FUNC_HANDSHAKE_REQ("\x00\x01\x01\x01", 4);
+    bool isRequest = (funcCode == FB::FUNC_READ) ||
+                     (funcCode == FUNC_HANDSHAKE_REQ);
+
+    if (!isResponse && !isRequest)
         return result;
-    }
 
     result.isValid = true;
-    // Data starts after header(4) + func(4) + dataLen(2) = offset 10
     result.rawData = frame.mid(10);
-    // Fanuc responses do not carry a cmdCode directly.
-    // The caller must track which request was sent.
-    result.cmdCode = 0;
+
+    // For request frames (processed by mock server), provide the stored cmdCode
+    if (isRequest) {
+        result.cmdCode = m_lastRequestCmdCode;
+    }
+    // For response frames, cmdCode stays 0 (FanucRealtimeWidget tracks via m_pollIndex)
+
     return result;
 }
 
@@ -834,6 +847,21 @@ QByteArray FanucProtocol::mockResponseData(quint8 cmdCode, const QByteArray& req
 
 QByteArray FanucProtocol::mockResponse(quint8 cmdCode, const QByteArray& requestData) const
 {
+    // Special: handshake response (cmdCode 0xFF)
+    if (cmdCode == 0xFF) {
+        QByteArray frame;
+        frame.append(4, static_cast<char>(FanucFrameBuilder::HEADER_BYTE));
+        frame.append('\x00');
+        frame.append('\x01');
+        frame.append('\x01');
+        frame.append('\x02'); // response
+        frame.append('\x00');
+        frame.append('\x02');
+        frame.append('\x00');
+        frame.append('\x02');
+        return frame;
+    }
+
     QByteArray payload = mockResponseData(cmdCode, requestData);
     if (payload.isEmpty())
         return QByteArray();
