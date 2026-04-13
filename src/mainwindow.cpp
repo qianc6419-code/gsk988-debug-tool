@@ -17,6 +17,11 @@
 #include "protocol/siemens/siemenswidgetfactory.h"
 #include "protocol/siemens/siemensrealtimewidget.h"
 #include "protocol/siemens/siemenscommandwidget.h"
+#include "protocol/mazak/mazakprotocol.h"
+#include "protocol/mazak/mazakwidgetfactory.h"
+#include "protocol/mazak/mazakrealtimewidget.h"
+#include "protocol/mazak/mazakcommandwidget.h"
+#include "protocol/mazak/mazakdllwrapper.h"
 #include "network/mockserver.h"
 #include "ui/logwidget.h"
 #include "protocol/iprotocol.h"
@@ -28,6 +33,7 @@
 #include <QSpinBox>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
+#include <QCoreApplication>
 #include <QNetworkReply>
 #include <QUrlQuery>
 #include <QApplication>
@@ -83,6 +89,7 @@ void MainWindow::setupToolBar()
     m_protocolCombo->addItem("Modbus TCP");
     m_protocolCombo->addItem("Fanuc FOCAS");
     m_protocolCombo->addItem("Siemens S7");
+    m_protocolCombo->addItem("Mazak Smooth");
     m_toolbar->addWidget(m_protocolCombo);
 
     m_toolbar->addSeparator();
@@ -151,6 +158,8 @@ void MainWindow::switchProtocol(int index)
         if (fanucRt) fanucRt->stopPolling();
         auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
         if (siemensRt) siemensRt->stopPolling();
+        auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
+        if (mazakRt) mazakRt->stopPolling();
     }
 
     // Stop mock server if running
@@ -188,6 +197,10 @@ void MainWindow::switchProtocol(int index)
     case 3:
         m_protocol = new SiemensProtocol(this);
         m_widgetFactory = new SiemensWidgetFactory;
+        break;
+    case 4:
+        m_protocol = new MazakProtocol(this);
+        m_widgetFactory = new MazakWidgetFactory;
         break;
     default:
         m_protocol = new Gsk988Protocol(this);
@@ -327,6 +340,11 @@ void MainWindow::switchTransport(int index)
         if (siemensRtDisc) {
             siemensRtDisc->stopPolling();
             siemensRtDisc->clearData();
+        }
+        auto* mazakRtDisc = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
+        if (mazakRtDisc) {
+            mazakRtDisc->stopPolling();
+            mazakRtDisc->clearData();
         }
     });
 
@@ -681,6 +699,67 @@ void MainWindow::onResponseTimeout()
 
 void MainWindow::onConnectClicked()
 {
+    // === Mazak 协议使用 DLL 连接，不走 Transport 层 ===
+    if (m_protocolCombo->currentIndex() == 4) {
+        auto& dll = MazakDLLWrapper::instance();
+        if (dll.isConnected()) {
+            // 断开
+            auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
+            if (mazakRt) { mazakRt->stopPolling(); mazakRt->clearData(); }
+            dll.disconnect(dll.handle());
+            dll.clearConnection();
+            updateConnectionIndicator(Disconnected);
+            m_connectBtn->setText("连接");
+            m_statusLabel->setText("未连接");
+            return;
+        }
+
+        bool isMock = (m_modeCombo->currentIndex() == 1);
+
+        // Mock 模式：不加载 DLL，直接模拟连接
+        if (isMock) {
+            dll.setHandle(1); // 模拟句柄
+            updateConnectionIndicator(Connected);
+            m_connectBtn->setText("断开");
+            m_statusLabel->setText("已连接(Mock)");
+            auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
+            if (mazakRt) mazakRt->startPolling();
+            return;
+        }
+
+        // 真实模式：加载 DLL 并连接
+        QLineEdit* ipEdit = m_transportConfigWidget ? m_transportConfigWidget->findChild<QLineEdit*>() : nullptr;
+        QSpinBox* portSpin = m_transportConfigWidget ? m_transportConfigWidget->findChild<QSpinBox*>() : nullptr;
+        QString ip = ipEdit ? ipEdit->text() : "192.168.1.1";
+        int port = portSpin ? portSpin->value() : 10000;
+
+        if (!dll.isLoaded()) {
+            QString dllPath = QCoreApplication::applicationDirPath() + "/NTIFDLL";
+            if (!dll.load(dllPath)) {
+                m_logTab->logError("无法加载 NTIFDLL.dll: " + dllPath + ".dll (DLL可能需要32位编译)");
+                updateConnectionIndicator(Error);
+                m_statusLabel->setText("DLL加载失败");
+                return;
+            }
+        }
+
+        unsigned short handle = 0;
+        if (dll.connect(handle, ip, port, 3000)) {
+            dll.setHandle(handle);
+            updateConnectionIndicator(Connected);
+            m_connectBtn->setText("断开");
+            m_statusLabel->setText("已连接");
+            auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
+            if (mazakRt) mazakRt->startPolling();
+        } else {
+            updateConnectionIndicator(Error);
+            m_statusLabel->setText("连接失败: " + MazakFrameBuilder::errorToString(dll.lastError()));
+            m_logTab->logError("Mazak 连接失败: " + MazakFrameBuilder::errorToString(dll.lastError()));
+        }
+        return;
+    }
+
+    // === 其他协议使用 Transport 层 ===
     if (m_transport && m_transport->isConnected()) {
         // Disconnect
         auto* rt = qobject_cast<Gsk988RealtimeWidget*>(m_realtimeTab);
@@ -691,6 +770,8 @@ void MainWindow::onConnectClicked()
         if (fanucRt) fanucRt->stopPolling();
         auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
         if (siemensRt) siemensRt->stopPolling();
+        auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
+        if (mazakRt) mazakRt->stopPolling();
         if (m_mockServer) m_mockServer->stop();
         m_transport->disconnectFromHost();
         return;

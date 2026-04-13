@@ -25,6 +25,9 @@ class FanucCommandWidget;
 class SiemensRealtimeWidget;
 class SiemensCommandWidget;
 class SiemensProtocol;
+class MazakRealtimeWidget;
+class MazakCommandWidget;
+class MazakProtocol;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT

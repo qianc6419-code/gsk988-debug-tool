@@ -38,6 +38,13 @@ SOURCES += \
     src/protocol/siemens/siemensrealtimewidget.cpp \
     src/protocol/siemens/siemenscommandwidget.cpp \
     src/protocol/siemens/siemensparsewidget.cpp \
+    src/protocol/mazak/mazakframebuilder.cpp \
+    src/protocol/mazak/mazakdllwrapper.cpp \
+    src/protocol/mazak/mazakprotocol.cpp \
+    src/protocol/mazak/mazakwidgetfactory.cpp \
+    src/protocol/mazak/mazakrealtimewidget.cpp \
+    src/protocol/mazak/mazakcommandwidget.cpp \
+    src/protocol/mazak/mazakparsewidget.cpp \
     src/ui/logwidget.cpp
 
 HEADERS += \
@@ -71,5 +78,12 @@ HEADERS += \
     src/protocol/siemens/siemensrealtimewidget.h \
     src/protocol/siemens/siemenscommandwidget.h \
     src/protocol/siemens/siemensparsewidget.h \
+    src/protocol/mazak/mazakframebuilder.h \
+    src/protocol/mazak/mazakdllwrapper.h \
+    src/protocol/mazak/mazakprotocol.h \
+    src/protocol/mazak/mazakwidgetfactory.h \
+    src/protocol/mazak/mazakrealtimewidget.h \
+    src/protocol/mazak/mazakcommandwidget.h \
+    src/protocol/mazak/mazakparsewidget.h \
     src/ui/iprotocolwidgetfactory.h \
     src/ui/logwidget.h
