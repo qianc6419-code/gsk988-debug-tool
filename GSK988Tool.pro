@@ -45,6 +45,13 @@ SOURCES += \
     src/protocol/mazak/mazakrealtimewidget.cpp \
     src/protocol/mazak/mazakcommandwidget.cpp \
     src/protocol/mazak/mazakparsewidget.cpp \
+    src/protocol/knd/kndframebuilder.cpp \
+    src/protocol/knd/kndrestclient.cpp \
+    src/protocol/knd/kndprotocol.cpp \
+    src/protocol/knd/kndwidgetfactory.cpp \
+    src/protocol/knd/kndrealtimewidget.cpp \
+    src/protocol/knd/kndcommandwidget.cpp \
+    src/protocol/knd/kndparsewidget.cpp \
     src/ui/logwidget.cpp
 
 HEADERS += \
@@ -85,5 +92,12 @@ HEADERS += \
     src/protocol/mazak/mazakrealtimewidget.h \
     src/protocol/mazak/mazakcommandwidget.h \
     src/protocol/mazak/mazakparsewidget.h \
+    src/protocol/knd/kndframebuilder.h \
+    src/protocol/knd/kndrestclient.h \
+    src/protocol/knd/kndprotocol.h \
+    src/protocol/knd/kndwidgetfactory.h \
+    src/protocol/knd/kndrealtimewidget.h \
+    src/protocol/knd/kndcommandwidget.h \
+    src/protocol/knd/kndparsewidget.h \
     src/ui/iprotocolwidgetfactory.h \
     src/ui/logwidget.h

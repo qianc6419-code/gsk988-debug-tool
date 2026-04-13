@@ -22,6 +22,11 @@
 #include "protocol/mazak/mazakrealtimewidget.h"
 #include "protocol/mazak/mazakcommandwidget.h"
 #include "protocol/mazak/mazakdllwrapper.h"
+#include "protocol/knd/kndprotocol.h"
+#include "protocol/knd/kndwidgetfactory.h"
+#include "protocol/knd/kndrealtimewidget.h"
+#include "protocol/knd/kndcommandwidget.h"
+#include "protocol/knd/kndrestclient.h"
 #include "network/mockserver.h"
 #include "ui/logwidget.h"
 #include "protocol/iprotocol.h"
@@ -90,6 +95,7 @@ void MainWindow::setupToolBar()
     m_protocolCombo->addItem("Fanuc FOCAS");
     m_protocolCombo->addItem("Siemens S7");
     m_protocolCombo->addItem("Mazak Smooth");
+    m_protocolCombo->addItem("KND REST API");
     m_toolbar->addWidget(m_protocolCombo);
 
     m_toolbar->addSeparator();
@@ -160,6 +166,8 @@ void MainWindow::switchProtocol(int index)
         if (siemensRt) siemensRt->stopPolling();
         auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
         if (mazakRt) mazakRt->stopPolling();
+        auto* kndRt = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
+        if (kndRt) kndRt->stopPolling();
     }
 
     // Stop mock server if running
@@ -201,6 +209,10 @@ void MainWindow::switchProtocol(int index)
     case 4:
         m_protocol = new MazakProtocol(this);
         m_widgetFactory = new MazakWidgetFactory;
+        break;
+    case 5:
+        m_protocol = new KndProtocol(this);
+        m_widgetFactory = new KndWidgetFactory;
         break;
     default:
         m_protocol = new Gsk988Protocol(this);
@@ -345,6 +357,11 @@ void MainWindow::switchTransport(int index)
         if (mazakRtDisc) {
             mazakRtDisc->stopPolling();
             mazakRtDisc->clearData();
+        }
+        auto* kndRtDisc2 = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
+        if (kndRtDisc2) {
+            kndRtDisc2->stopPolling();
+            kndRtDisc2->clearData();
         }
     });
 
@@ -759,6 +776,65 @@ void MainWindow::onConnectClicked()
         return;
     }
 
+    // === KND 协议使用 HTTP REST API，不走 Transport 层 ===
+    if (m_protocolCombo->currentIndex() == 5) {
+        auto& client = KndRestClient::instance();
+        if (client.isConnected()) {
+            auto* kndRt = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
+            if (kndRt) { kndRt->stopPolling(); kndRt->clearData(); }
+            client.setConnected(false);
+            updateConnectionIndicator(Disconnected);
+            m_connectBtn->setText("连接");
+            m_statusLabel->setText("未连接");
+            return;
+        }
+
+        bool isMock = (m_modeCombo->currentIndex() == 1);
+
+        QLineEdit* ipEdit = m_transportConfigWidget ? m_transportConfigWidget->findChild<QLineEdit*>() : nullptr;
+        QString ip = ipEdit ? ipEdit->text() : "192.168.1.1";
+
+        client.setBaseUrl(ip);
+        client.setMockMode(isMock);
+
+        if (isMock) {
+            client.setConnected(true);
+            updateConnectionIndicator(Connected);
+            m_connectBtn->setText("断开");
+            m_statusLabel->setText("已连接(Mock)");
+            auto* kndRt = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
+            if (kndRt) kndRt->startPolling();
+            return;
+        }
+
+        // 真实模式：发送测试请求验证连接
+        m_logTab->logError("正在连接 KND REST API: " + ip + "...");
+        connect(&client, &KndRestClient::statusReceived, this, [this](const QJsonObject&) {
+            auto& c = KndRestClient::instance();
+            c.setConnected(true);
+            updateConnectionIndicator(Connected);
+            m_connectBtn->setText("断开");
+            m_statusLabel->setText("已连接");
+            auto* kndRt = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
+            if (kndRt) kndRt->startPolling();
+            disconnect(&c, &KndRestClient::statusReceived, this, 0);
+        }, Qt::UniqueConnection);
+
+        connect(&client, &KndRestClient::errorOccurred, this, [this](const QString& msg) {
+            static bool firstError = true;
+            if (!firstError) return;
+            firstError = false;
+            auto& c = KndRestClient::instance();
+            c.setConnected(false);
+            updateConnectionIndicator(Error);
+            m_statusLabel->setText("连接失败");
+            m_logTab->logError("KND 连接失败: " + msg);
+        }, Qt::UniqueConnection);
+
+        client.getStatus();
+        return;
+    }
+
     // === 其他协议使用 Transport 层 ===
     if (m_transport && m_transport->isConnected()) {
         // Disconnect
@@ -772,6 +848,8 @@ void MainWindow::onConnectClicked()
         if (siemensRt) siemensRt->stopPolling();
         auto* mazakRt = qobject_cast<MazakRealtimeWidget*>(m_realtimeTab);
         if (mazakRt) mazakRt->stopPolling();
+        auto* kndRtDisc = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
+        if (kndRtDisc) kndRtDisc->stopPolling();
         if (m_mockServer) m_mockServer->stop();
         m_transport->disconnectFromHost();
         return;

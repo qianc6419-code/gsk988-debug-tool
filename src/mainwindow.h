@@ -28,6 +28,9 @@ class SiemensProtocol;
 class MazakRealtimeWidget;
 class MazakCommandWidget;
 class MazakProtocol;
+class KndRealtimeWidget;
+class KndCommandWidget;
+class KndProtocol;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
