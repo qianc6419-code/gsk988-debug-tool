@@ -13,9 +13,14 @@
 #include "protocol/fanuc/fanucwidgetfactory.h"
 #include "protocol/fanuc/fanucrealtimewidget.h"
 #include "protocol/fanuc/fanuccommandwidget.h"
+#include "protocol/siemens/siemensprotocol.h"
+#include "protocol/siemens/siemenswidgetfactory.h"
+#include "protocol/siemens/siemensrealtimewidget.h"
+#include "protocol/siemens/siemenscommandwidget.h"
 #include "network/mockserver.h"
 #include "ui/logwidget.h"
 #include "protocol/iprotocol.h"
+#include <QDebug>
 
 #include <QToolBar>
 #include <QHBoxLayout>
@@ -77,6 +82,7 @@ void MainWindow::setupToolBar()
     m_protocolCombo->addItem("GSK988");
     m_protocolCombo->addItem("Modbus TCP");
     m_protocolCombo->addItem("Fanuc FOCAS");
+    m_protocolCombo->addItem("Siemens S7");
     m_toolbar->addWidget(m_protocolCombo);
 
     m_toolbar->addSeparator();
@@ -143,6 +149,8 @@ void MainWindow::switchProtocol(int index)
         if (modbusRt) modbusRt->stopPolling();
         auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
         if (fanucRt) fanucRt->stopPolling();
+        auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+        if (siemensRt) siemensRt->stopPolling();
     }
 
     // Stop mock server if running
@@ -176,6 +184,10 @@ void MainWindow::switchProtocol(int index)
     case 2:
         m_protocol = new FanucProtocol(this);
         m_widgetFactory = new FanucWidgetFactory;
+        break;
+    case 3:
+        m_protocol = new SiemensProtocol(this);
+        m_widgetFactory = new SiemensWidgetFactory;
         break;
     default:
         m_protocol = new Gsk988Protocol(this);
@@ -278,6 +290,13 @@ void MainWindow::switchTransport(int index)
             QByteArray handshakeFrame = qobject_cast<FanucProtocol*>(m_protocol)->buildHandshake();
             m_transport->send(handshakeFrame);
             m_logTab->logFrame(handshakeFrame, true, "[握手] Fanuc FOCAS");
+        } else if (m_protocolCombo->currentIndex() == 3) {
+            // Siemens S7: 3-step handshake
+            m_needStartPolling = true;
+            auto* siemens = qobject_cast<SiemensProtocol*>(m_protocol);
+            QByteArray frame = siemens->buildHandshake();
+            m_transport->send(frame);
+            m_logTab->logFrame(frame, true, "[握手1/3] Siemens S7");
         }
     });
 
@@ -303,6 +322,11 @@ void MainWindow::switchTransport(int index)
         if (fanucRt) {
             fanucRt->stopPolling();
             fanucRt->clearData();
+        }
+        auto* siemensRtDisc = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+        if (siemensRtDisc) {
+            siemensRtDisc->stopPolling();
+            siemensRtDisc->clearData();
         }
     });
 
@@ -475,6 +499,50 @@ void MainWindow::setupProtocolConnections()
             m_timeoutTimer->start();
         });
     }
+
+    // Siemens realtime widget
+    auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+    if (siemensRt) {
+        connect(siemensRt, &SiemensRealtimeWidget::pollRequest,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            auto* srt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+            if (srt) srt->appendHexDisplay(frame, true);
+
+            m_timeoutTimer->start();
+        });
+    }
+
+    // Siemens command widget
+    auto* siemensCmd = qobject_cast<SiemensCommandWidget*>(m_commandTab);
+    if (siemensCmd) {
+        connect(siemensCmd, &SiemensCommandWidget::sendCommand,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_waitingManualResponse = true;
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            m_timeoutTimer->start();
+        });
+    }
 }
 
 void MainWindow::onDataReceived(const QByteArray& rawData)
@@ -523,11 +591,37 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
             fanucRt->updateData(resp);
         }
 
+        // Handle Siemens S7 multi-step handshake
+        auto* siemens = qobject_cast<SiemensProtocol*>(m_protocol);
+        if (siemens && !siemens->isHandshakeComplete()) {
+            int step = siemens->handshakeStep();
+            QByteArray nextFrame = siemens->advanceHandshake();
+            if (!nextFrame.isEmpty()) {
+                m_transport->send(nextFrame);
+                m_logTab->logFrame(nextFrame, true,
+                    QString("[握手%1/3] Siemens S7").arg(step + 1));
+            }
+            if (siemens->isHandshakeComplete() && m_needStartPolling) {
+                m_needStartPolling = false;
+                auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+                if (siemensRt) siemensRt->startPolling();
+            }
+            continue;  // Don't route handshake frames to realtime tab
+        }
+
+        // Route to Siemens realtime tab
+        auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+        if (siemensRt) {
+            siemensRt->appendHexDisplay(frame, false);
+            siemensRt->updateData(resp);
+        }
+
         // Start polling after receiving the permission (0x0A) response
         if (m_needStartPolling) {
             m_needStartPolling = false;
             if (rt) rt->startPolling();
             if (fanucRt) fanucRt->startPolling();
+            if (siemensRt) siemensRt->startPolling();
         }
 
         // Only show in command tab if this was a manual send
@@ -554,6 +648,11 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
                 QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
                 fanucCmdW->showResponse(resp, interp);
             }
+            auto* siemensCmdW = qobject_cast<SiemensCommandWidget*>(m_commandTab);
+            if (siemensCmdW) {
+                QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
+                siemensCmdW->showResponse(resp, interp);
+            }
         }
     }
 }
@@ -575,6 +674,9 @@ void MainWindow::onResponseTimeout()
 
     auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
     if (fanucRt) fanucRt->updateData(dummy);
+
+    auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+    if (siemensRt) siemensRt->updateData(dummy);
 }
 
 void MainWindow::onConnectClicked()
@@ -587,6 +689,8 @@ void MainWindow::onConnectClicked()
         if (modbusRt) modbusRt->stopPolling();
         auto* fanucRt = qobject_cast<FanucRealtimeWidget*>(m_realtimeTab);
         if (fanucRt) fanucRt->stopPolling();
+        auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
+        if (siemensRt) siemensRt->stopPolling();
         if (m_mockServer) m_mockServer->stop();
         m_transport->disconnectFromHost();
         return;

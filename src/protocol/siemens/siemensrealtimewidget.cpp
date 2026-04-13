@@ -592,13 +592,17 @@ void SiemensRealtimeWidget::updateData(const ParsedResponse& resp)
     // Advance to next poll item
     m_pollIndex++;
     if (m_pollIndex >= PI_COUNT) {
-        if (m_autoRefreshCheck->isChecked()) {
-            m_cycleDelayTimer->start();
-        }
+        // Cycle complete — start delay timer for next cycle
         m_pollIndex = 0;
         m_cycleActive = false;
+        if (m_autoRefreshCheck->isChecked()) {
+            int secs = m_intervalCombo->currentData().toInt();
+            m_cycleDelayTimer->start(secs * 1000);
+        }
     } else {
-        startCycle();
+        // Emit next poll request directly (don't call startCycle which resets state)
+        const auto& item = pollItems[m_pollIndex];
+        emit pollRequest(item.cmdCode, item.params);
     }
 }
 

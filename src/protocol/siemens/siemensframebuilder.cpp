@@ -1,217 +1,371 @@
 #include "siemensframebuilder.h"
 #include <cstring>
 
-// ===== 握手帧 =====
+// ========== S7 Frame Builder Helpers ==========
+
+// Build a standard S7 Read Var request (single item, S7ANY addressing)
+// Layout:
+//   TPKT (4): 03 00 XX XX
+//   COTP  (3): 02 F0 80
+//   S7   (12): 32 01 00 00 00 01 00 0E 00 00 00 00
+//   Param(14): 04 01 12 0A 10 TT NN NN DD DD AA XX XX XX
+// Total = 33 bytes
+
+static QByteArray buildReadVar(quint8 transportSize, quint16 numElements,
+                                quint16 dbNumber, quint8 area,
+                                quint8 addrHi, quint8 addrMid, quint8 addrLo)
+{
+    QByteArray frame(33, '\0');
+    // TPKT
+    frame[0] = 0x03;
+    frame[1] = 0x00;
+    frame[2] = 0x00;
+    frame[3] = 0x21; // 33 bytes
+    // COTP Data
+    frame[4] = 0x02;
+    frame[5] = (char)0xF0;
+    frame[6] = (char)0x80;
+    // S7 Header
+    frame[7] = 0x32;  // Protocol ID
+    frame[8] = 0x01;  // ROSCTR = Job
+    frame[9] = 0x00; frame[10] = 0x00;  // Reserved
+    frame[11] = 0x00; frame[12] = 0x01; // PDU Ref
+    frame[13] = 0x00; frame[14] = 0x0E; // Param length = 14
+    frame[15] = 0x00; frame[16] = 0x00; // Data length = 0
+    frame[17] = 0x00; frame[18] = 0x00; // Error class/code
+    // Parameter: Read Var, 1 item
+    frame[19] = 0x04;  // Function: Read Var
+    frame[20] = 0x01;  // Item count
+    // S7ANY item
+    frame[21] = 0x12;  // Variable spec
+    frame[22] = 0x0A;  // Address spec length = 10
+    frame[23] = 0x10;  // Syntax ID = S7ANY
+    frame[24] = (char)transportSize;
+    frame[25] = (char)((numElements >> 8) & 0xFF);
+    frame[26] = (char)(numElements & 0xFF);
+    frame[27] = (char)((dbNumber >> 8) & 0xFF);
+    frame[28] = (char)(dbNumber & 0xFF);
+    frame[29] = (char)area;
+    frame[30] = (char)addrHi;
+    frame[31] = (char)addrMid;
+    frame[32] = (char)addrLo;
+    return frame;
+}
+
+// Build a standard S7 Read Var request with 2 items
+// Layout:
+//   TPKT (4): 03 00 XX XX
+//   COTP  (3): 02 F0 80
+//   S7   (12): 32 01 00 00 00 01 00 1C 00 00 00 00
+//   Param(30): 04 02  12 0A 10 TT1 N1 N1 D1 D1 A1 X1 X1 X1
+//                      12 0A 10 TT2 N2 N2 D2 D2 A2 X2 X2 X2
+// Total = 49 bytes
+
+static QByteArray buildReadVar2Items(
+    quint8 ts1, quint16 n1, quint16 db1, quint8 area1, quint8 a1hi, quint8 a1mid, quint8 a1lo,
+    quint8 ts2, quint16 n2, quint16 db2, quint8 area2, quint8 a2hi, quint8 a2mid, quint8 a2lo)
+{
+    QByteArray frame(49, '\0');
+    // TPKT
+    frame[0] = 0x03;
+    frame[1] = 0x00;
+    frame[2] = 0x00;
+    frame[3] = 0x31; // 49 bytes
+    // COTP Data
+    frame[4] = 0x02;
+    frame[5] = (char)0xF0;
+    frame[6] = (char)0x80;
+    // S7 Header
+    frame[7] = 0x32;
+    frame[8] = 0x01;  // Job
+    frame[9] = 0x00; frame[10] = 0x00;
+    frame[11] = 0x00; frame[12] = 0x01; // PDU Ref
+    frame[13] = 0x00; frame[14] = 0x1C; // Param length = 28
+    frame[15] = 0x00; frame[16] = 0x00; // Data length = 0
+    frame[17] = 0x00; frame[18] = 0x00;
+    // Parameter
+    frame[19] = 0x04;  // Read Var
+    frame[20] = 0x02;  // 2 items
+    // Item 1
+    frame[21] = 0x12; frame[22] = 0x0A; frame[23] = 0x10;
+    frame[24] = (char)ts1;
+    frame[25] = (char)((n1 >> 8) & 0xFF); frame[26] = (char)(n1 & 0xFF);
+    frame[27] = (char)((db1 >> 8) & 0xFF); frame[28] = (char)(db1 & 0xFF);
+    frame[29] = (char)area1;
+    frame[30] = (char)a1hi; frame[31] = (char)a1mid; frame[32] = (char)a1lo;
+    // Item 2
+    frame[33] = 0x12; frame[34] = 0x0A; frame[35] = 0x10;
+    frame[36] = (char)ts2;
+    frame[37] = (char)((n2 >> 8) & 0xFF); frame[38] = (char)(n2 & 0xFF);
+    frame[39] = (char)((db2 >> 8) & 0xFF); frame[40] = (char)(db2 & 0xFF);
+    frame[41] = (char)area2;
+    frame[42] = (char)a2hi; frame[43] = (char)a2mid; frame[44] = (char)a2lo;
+    return frame;
+}
+
+// ========== 握手帧 ==========
+
+// HANDSHAKE_1: COTP Connect Request (22 bytes)
 const QByteArray SiemensFrameBuilder::HANDSHAKE_1 =
-    QByteArray::fromHex("0300001611e00000 004800c1020400c2 020d04c0010a");
+    QByteArray::fromHex("0300001611e0000000480"
+                        "0c1020400c2020d04c0010a");
 
+// HANDSHAKE_2: S7 Communication Setup (25 bytes)
 const QByteArray SiemensFrameBuilder::HANDSHAKE_2 =
-    QByteArray::fromHex("0300001902f08032 0100000001000800 00f0000064006403 c0");
+    QByteArray::fromHex("0300001902f08032010000"
+                        "00010008000"
+                        "0f0000064006403c0");
 
+// HANDSHAKE_3: S7 Setup (29 bytes)
+// 03 00 00 1D  02 F0 80  32 01 00 00 00 01 00 00 C0 00 00 04 01 12 08 82 01 00 14 00 01 3B
 const QByteArray SiemensFrameBuilder::HANDSHAKE_3 =
-    QByteArray::fromHex("0300001d02f08032 01000000010000c0 0000040112088201 00140001"
-                        "3b010300000702 f000");
+    QByteArray("\x03\x00\x00\x1D" // TPKT: 29
+               "\x02\xF0\x80"     // COTP Data
+               "\x32\x01"         // S7 Protocol + Job
+               "\x00\x00"         // Reserved
+               "\x00\x01"         // PDU Ref
+               "\x00\x00"         // Param length = 0
+               "\xC0\x00"         // Data length = 49152 (0xC000)
+               "\x00\x04"         // Error
+               "\x01\x12\x08\x82" // Read Var, 1 item, var spec, addr len=8
+               "\x01\x00\x14"     // Transport=1, numElem Hi, ...
+               "\x00\x01\x3B",    // ...
+               29);
 
 // ===== 系统信息 =====
+
+// CNC标识 (area=0x82, transport=0x02 byte, numElem varies)
 const QByteArray SiemensFrameBuilder::CMD_CNC_ID =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 466e0001"
-                        "1a010300000702 f000");
+    buildReadVar(0x02, 20, 0x0001, 0x82, 0x00, 0x46, 0x6E);
 
 const QByteArray SiemensFrameBuilder::CMD_CNC_TYPE =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 46780004"
-                        "1a010300000702 f000");
+    buildReadVar(0x02, 20, 0x0004, 0x82, 0x00, 0x46, 0x78);
 
 const QByteArray SiemensFrameBuilder::CMD_VER_INFO =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 46780001"
-                        "1a010300000702 f000");
+    buildReadVar(0x02, 20, 0x0001, 0x82, 0x00, 0x46, 0x78);
 
 const QByteArray SiemensFrameBuilder::CMD_MANUF_DATE =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 46780003"
-                        "1a010300000702 f000");
+    buildReadVar(0x02, 20, 0x0003, 0x82, 0x00, 0x46, 0x78);
 
 // ===== 运行状态 =====
+// MODE uses 2 items to read mode + refpoint status
+
 const QByteArray SiemensFrameBuilder::CMD_MODE =
-    QByteArray::fromHex("0300002702f08032 01000000140000c1 6000000402120882 21000300"
-                        "017f0112088241 000c00017f0103 0000000702f000");
+    buildReadVar2Items(
+        0x04, 1, 0x0001, 0x82, 0x00, 0x21, 0x00,  // item 1: mode
+        0x04, 1, 0x0001, 0x82, 0x00, 0x41, 0x0C     // item 2: ref
+    );
 
 const QByteArray SiemensFrameBuilder::CMD_STATUS =
-    QByteArray::fromHex("0300002702f08032 01000000140000c1 6000000402120882 41000b00"
-                        "017f0112088241 000d00017f0103 0000000702f000");
+    buildReadVar2Items(
+        0x04, 1, 0x0001, 0x82, 0x00, 0x41, 0x0B,  // item 1
+        0x04, 1, 0x0001, 0x82, 0x00, 0x41, 0x0D     // item 2
+    );
 
 // ===== 主轴 =====
+
 const QByteArray SiemensFrameBuilder::CMD_SPINDLE_SET_SPEED =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 000300"
-                        "04720103000 007020f000");
+    buildReadVar(0x02, 4, 0x0001, 0x82, 0x00, 0x00, 0x03);
 
 const QByteArray SiemensFrameBuilder::CMD_SPINDLE_ACT_SPEED =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000200"
-                        "01720103000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x00);
 
 const QByteArray SiemensFrameBuilder::CMD_SPINDLE_RATE =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000400"
-                        "01720103000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x04);
 
 // ===== 进给 =====
+
 const QByteArray SiemensFrameBuilder::CMD_FEED_SET_SPEED =
-    QByteArray::fromHex("0300001d02f08032 01000000120000c0 0000040112088241 000200"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x02);
 
 const QByteArray SiemensFrameBuilder::CMD_FEED_ACT_SPEED =
-    QByteArray::fromHex("0300001d02f08032 01000000120000c0 0000040112088241 000100"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x01);
 
 const QByteArray SiemensFrameBuilder::CMD_FEED_RATE =
-    QByteArray::fromHex("0300001d02f08032 01000000130000c0 0000040112088241 000300"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x03);
 
 // ===== 计数与时间 =====
+
 const QByteArray SiemensFrameBuilder::CMD_PRODUCTS =
-    QByteArray::fromHex("0300001d02f08032 01000000110000c0 0000040112088241 007900"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x79);
 
 const QByteArray SiemensFrameBuilder::CMD_SET_PRODUCTS =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 007700"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x77);
 
 const QByteArray SiemensFrameBuilder::CMD_CYCLE_TIME =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 012900"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x29);
 
 const QByteArray SiemensFrameBuilder::CMD_REMAIN_TIME =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 012a00"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x2A);
 
 // ===== 程序与刀具 =====
+
 const QByteArray SiemensFrameBuilder::CMD_PROG_NAME =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000c00"
-                        "017a01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x0C);
 
 const QByteArray SiemensFrameBuilder::CMD_PROG_CONTENT =
-    QByteArray::fromHex("0300001d02f08032 01000000500000c0 0000040112088241 001f00"
-                        "017d01030000 07020f000");
+    buildReadVar(0x02, 40, 0x0001, 0x82, 0x00, 0x41, 0x1F);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_NUM =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 001700"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x17);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_D =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 002300"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x23);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_H =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 01b600"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0xB6);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_X_LEN =
-    QByteArray::fromHex("0300001d02f08032 01000000210000c0 0000040112088241 007100"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x71);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_Z_LEN =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088281 001100"
-                        "01142303000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x81, 0x11);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_RADIU =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000000"
-                        "017f01030000 07020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x00);
 
 const QByteArray SiemensFrameBuilder::CMD_TOOL_EDG =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000200"
-                        "02140103000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x02);
 
 // ===== 坐标 =====
+
 const QByteArray SiemensFrameBuilder::CMD_MACH_POS =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000200"
-                        "01740103000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x02);
 
 const QByteArray SiemensFrameBuilder::CMD_WORK_POS =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 001900"
-                        "01700103000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x19);
 
 const QByteArray SiemensFrameBuilder::CMD_REMAIN_POS =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088241 000300"
-                        "01740103000 007020f000");
+    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x03);
 
 const QByteArray SiemensFrameBuilder::CMD_AXIS_NAME =
-    QByteArray::fromHex("0300001d02f08032 01000000300000c0 0000040112088241 4e7000"
-                        "011a0a03000 007020f000");
+    buildReadVar(0x02, 20, 0x0001, 0x82, 0x00, 0x4E, 0x70);
 
 // ===== 驱动诊断 =====
+
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_VOLTAGE =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 001a00"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x01, 0x1A);
 
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_CURRENT =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 0000040112088201 001e00"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x01, 0x1E);
 
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_LOAD1 =
-    QByteArray::fromHex("0300001d02f08032 01000000150000c0 00000401120882a2 002000"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA2, 0x00, 0x01, 0x20);
 
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_LOAD2 =
-    QByteArray::fromHex("0300001d02f08032 01000000160000c0 00000401120882a2 001d00"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA2, 0x00, 0x01, 0x1D);
 
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_LOAD3 =
-    QByteArray::fromHex("0300001d02f08032 01000000170000c0 00000401120882a2 001e00"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA2, 0x00, 0x01, 0x1E);
 
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_LOAD4 =
-    QByteArray::fromHex("0300001d02f08032 01000000180000c0 00000401120882a2 001f00"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA2, 0x00, 0x01, 0x1F);
 
 const QByteArray SiemensFrameBuilder::CMD_SPINDLE_LOAD1 =
-    QByteArray::fromHex("0300001d02f08032 01000000150000c0 00000401120882a1 002100"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA1, 0x00, 0x01, 0x21);
 
 const QByteArray SiemensFrameBuilder::CMD_SPINDLE_LOAD2 =
-    QByteArray::fromHex("0300001d02f08032 01000000150000c0 00000401120882a2 002100"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA2, 0x00, 0x01, 0x21);
 
 const QByteArray SiemensFrameBuilder::CMD_DRIVE_TEMPER =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 00000401120882a1 002300"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA1, 0x00, 0x01, 0x23);
 
 // ===== 告警 =====
-const QByteArray SiemensFrameBuilder::CMD_ALARM_NUM =
-    QByteArray::fromHex("0300001d02f08032 010000000c0000c0 0000040112088201 000700"
-                        "017f01030000 07020f000");
 
+const QByteArray SiemensFrameBuilder::CMD_ALARM_NUM =
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x01, 0x07);
+
+// CMD_ALARM uses 2 items
 const QByteArray SiemensFrameBuilder::CMD_ALARM =
-    QByteArray::fromHex("0300002702f08032 010000000d0000c1 6000000402120882 01000100"
-                        "017701120882 010004000177 01");
+    buildReadVar2Items(
+        0x04, 1, 0x0001, 0x82, 0x00, 0x01, 0x01,  // item 1: alarm index
+        0x04, 1, 0x0001, 0x82, 0x00, 0x01, 0x04     // item 2
+    );
 
 // ===== 变量读写 =====
-const QByteArray SiemensFrameBuilder::CMD_READ_R =
-    QByteArray::fromHex("0300001d02f08032 01000000100000c0 0000040112088241 000101"
-                        "012c15010300 0007020f000");
 
+const QByteArray SiemensFrameBuilder::CMD_READ_R =
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x2C, 0x15);
+
+// CMD_WRITE_R: S7 Write Var (41 bytes)
+// 03 00 00 29  02 F0 80  32 01 00 00 00 01 00 12 00 0C 00 00
+// 05 01 12 08 82 41 00 01 00 02 15 01 00 09 00 08 <8 bytes value>
 const QByteArray SiemensFrameBuilder::CMD_WRITE_R =
-    QByteArray::fromHex("0300002902f08032 010000001200000c 000c050112088241 000100"
-                        "021501000900 08000000000044f4 2041");
+    QByteArray("\x03\x00\x00\x29" // TPKT: 41
+               "\x02\xF0\x80"     // COTP
+               "\x32\x01"         // S7 + Job
+               "\x00\x00"         // Reserved
+               "\x00\x01"         // PDU Ref
+               "\x00\x12"         // Param length = 18
+               "\x00\x0C"         // Data length = 12
+               "\x00\x00"         // Error
+               "\x05\x01"         // Write Var, 1 item
+               "\x12\x08\x82\x41" // Item: var spec, addr len=8
+               "\x00\x01"         // Num elements
+               "\x00\x02"         // DB
+               "\x15\x01"         // Area + addr
+               "\x00\x09"         // Transport size + padding
+               "\x00\x08"         // Data length in data section
+               "\x00\x00\x00\x00" // Value bytes (placeholder)
+               "\x00\x00\x00\x00",// Value bytes (placeholder)
+               41);
 
 const QByteArray SiemensFrameBuilder::CMD_R_DRIVER =
-    QByteArray::fromHex("0300001d02f08032 01000000140000c0 00000401120882a1 002500"
-                        "01820103000 007020f000");
+    buildReadVar(0x02, 1, 0x0001, 0xA1, 0x00, 0x01, 0x25);
 
 // ===== 工件坐标系 =====
+// 3-item read request (49 bytes)
+
 const QByteArray SiemensFrameBuilder::CMD_T_WORK_SYSTEM =
-    QByteArray::fromHex("0300003102f0803201000000020000200000040312088241000100012001"
-                        "1208824100010005120112088241000100061201");
+    buildReadVar2Items(
+        0x04, 1, 0x0001, 0x82, 0x00, 0x01, 0x20,  // item 1
+        0x04, 1, 0x0001, 0x82, 0x00, 0x01, 0x05     // item 2
+    );
 
 const QByteArray SiemensFrameBuilder::CMD_M_WORK_SYSTEM =
-    QByteArray::fromHex("0300003102f0803201000000020000200000040312088241000100012001"
-                        "1208824100010005120112088241000100061201");
+    buildReadVar2Items(
+        0x04, 1, 0x0001, 0x82, 0x00, 0x01, 0x20,  // item 1
+        0x04, 1, 0x0001, 0x82, 0x00, 0x01, 0x06     // item 2
+    );
 
 // ===== PLC (独立连接, 2次握手) =====
-const QByteArray SiemensFrameBuilder::PLC_HANDSHAKE_1 =
-    QByteArray::fromHex("0300001611e000000001 00c0010ac1020102c2 020102");
 
+const QByteArray SiemensFrameBuilder::PLC_HANDSHAKE_1 =
+    QByteArray::fromHex("0300001611e0000000010"
+                        "0c0010ac1020102c2020102");
+
+// PLC_HANDSHAKE_2: S7 Comm Setup (25 bytes)
 const QByteArray SiemensFrameBuilder::PLC_HANDSHAKE_2 =
-    QByteArray::fromHex("0300001902f08032010000000400000800 00f0000001000101e0");
+    QByteArray("\x03\x00\x00\x19" // TPKT: 25
+               "\x02\xF0\x80"     // COTP
+               "\x32\x01"         // S7 + Job
+               "\x00\x00"         // Reserved
+               "\x00\x00"         // PDU Ref = 0
+               "\x00\x04"         // Param length = 4
+               "\x00\x08"         // Data length = 8
+               "\x00\xF0"         // Error
+               "\x00\x00"         // Padding
+               "\x01\x00"         // AMR
+               "\x01\x01"         // UDT
+               "\xE0",            // ...
+               25);
 
 const QByteArray SiemensFrameBuilder::CMD_PLC_READBYTE =
-    QByteArray::fromHex("0300001f02f080320100000001000e00000401120a1002000106408400000000");
+    QByteArray("\x03\x00\x00\x1F" // TPKT: 31
+               "\x02\xF0\x80"     // COTP
+               "\x32\x01"         // S7 + Job
+               "\x00\x00"         // Reserved
+               "\x00\x01"         // PDU Ref
+               "\x00\x0E"         // Param length = 14
+               "\x00\x00"         // Data length = 0
+               "\x00\x00"         // Error
+               "\x04\x01"         // Read Var, 1 item
+               "\x12\x0A\x10"     // Var spec, addr len=10, S7ANY
+               "\x02\x00\x01"     // Transport=byte, numElem=1
+               "\x06\x40"         // DB=1600
+               "\x84"             // Area=DB
+               "\x00\x00\x00",    // Address=0 (byteOffset*8 set at runtime)
+               31);
 
 
 // ===== 帧提取 =====
@@ -235,25 +389,27 @@ QByteArray SiemensFrameBuilder::extractFrame(QByteArray& buffer)
 QByteArray SiemensFrameBuilder::buildPositionCmd(const QByteArray& base, quint8 axisFlag)
 {
     QByteArray cmd(base);
-    if (cmd.size() > 26) cmd[26] = static_cast<char>(axisFlag);
+    // In buildReadVar format, the address field is at bytes 30-32
+    // axisFlag goes into byte 32 (addrLo)
+    if (cmd.size() > 32) cmd[32] = static_cast<char>(axisFlag);
     return cmd;
 }
 
 QByteArray SiemensFrameBuilder::buildAlarmCmd(int alarmIndex)
 {
     QByteArray cmd(CMD_ALARM);
-    if (cmd.size() > 26) cmd[26] = static_cast<char>(alarmIndex);
+    // In buildReadVar2Items format, item 1's addrLo is at byte 32
+    if (cmd.size() > 32) cmd[32] = static_cast<char>(alarmIndex);
     return cmd;
 }
 
 QByteArray SiemensFrameBuilder::buildReadRCmd(int rAddr)
 {
     QByteArray cmd(CMD_READ_R);
-    if (cmd.size() > 26) {
-        // C# code: [25] = flag[1], [26] = flag[0]
-        // rAddr is combined, split into high/low bytes
-        cmd[25] = static_cast<char>((rAddr >> 8) & 0xFF);
-        cmd[26] = static_cast<char>(rAddr & 0xFF);
+    // In buildReadVar format, the address field is at bytes 30-32
+    if (cmd.size() > 31) {
+        cmd[30] = static_cast<char>((rAddr >> 8) & 0xFF);
+        cmd[31] = static_cast<char>(rAddr & 0xFF);
     }
     return cmd;
 }
@@ -261,9 +417,10 @@ QByteArray SiemensFrameBuilder::buildReadRCmd(int rAddr)
 QByteArray SiemensFrameBuilder::buildWriteRCmd(int rAddr, double value)
 {
     QByteArray cmd(CMD_WRITE_R);
-    if (cmd.size() > 26) {
-        cmd[25] = static_cast<char>((rAddr >> 8) & 0xFF);
-        cmd[26] = static_cast<char>(rAddr & 0xFF);
+    // Write frame layout: address at bytes 28-29, value at bytes 33-40
+    if (cmd.size() > 29) {
+        cmd[28] = static_cast<char>((rAddr >> 8) & 0xFF);
+        cmd[29] = static_cast<char>(rAddr & 0xFF);
     }
     // Replace the double value (last 8 bytes)
     QByteArray valBytes = encodeDouble(value);
@@ -274,11 +431,12 @@ QByteArray SiemensFrameBuilder::buildWriteRCmd(int rAddr, double value)
 QByteArray SiemensFrameBuilder::buildRDriverCmd(quint8 axisFlag, quint8 addrFlag, quint8 indexFlag)
 {
     QByteArray cmd(CMD_R_DRIVER);
-    // C# code: [22] = axisFlag, [24] = addrFlag, [26] = indexFlag
-    if (cmd.size() > 26) {
-        cmd[22] = static_cast<char>(axisFlag);
-        cmd[24] = static_cast<char>(addrFlag);
-        cmd[26] = static_cast<char>(indexFlag);
+    // In buildReadVar format:
+    // byte 29 = area, byte 30 = addrHi, byte 31 = addrMid, byte 32 = addrLo
+    if (cmd.size() > 32) {
+        cmd[30] = static_cast<char>(axisFlag);
+        cmd[31] = static_cast<char>(addrFlag);
+        cmd[32] = static_cast<char>(indexFlag);
     }
     return cmd;
 }
@@ -286,8 +444,12 @@ QByteArray SiemensFrameBuilder::buildRDriverCmd(quint8 axisFlag, quint8 addrFlag
 QByteArray SiemensFrameBuilder::buildPLCReadCmd(int byteOffset)
 {
     QByteArray cmd(CMD_PLC_READBYTE);
-    if (cmd.size() > 0) {
-        cmd[cmd.size() - 1] = static_cast<char>(byteOffset * 8);
+    // The address field (last 3 bytes): set to byteOffset * 8 (bit address)
+    if (cmd.size() >= 3) {
+        int bitAddr = byteOffset * 8;
+        cmd[cmd.size() - 3] = static_cast<char>((bitAddr >> 16) & 0xFF);
+        cmd[cmd.size() - 2] = static_cast<char>((bitAddr >> 8) & 0xFF);
+        cmd[cmd.size() - 1] = static_cast<char>(bitAddr & 0xFF);
     }
     return cmd;
 }

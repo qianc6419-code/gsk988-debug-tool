@@ -1,5 +1,6 @@
 #include "mockserver.h"
 #include "protocol/iprotocol.h"
+#include <QDebug>
 
 MockServer::MockServer(IProtocol* protocol, QObject* parent)
     : QObject(parent)

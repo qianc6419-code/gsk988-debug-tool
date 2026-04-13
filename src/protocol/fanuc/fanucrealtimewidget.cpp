@@ -79,13 +79,34 @@ FanucRealtimeWidget::FanucRealtimeWidget(QWidget* parent)
         if (m_autoRefreshCheck->isChecked())
             startCycle();
     });
+
+    // Inter-poll delay: Fanuc devices need ~300ms between commands
+    m_interPollTimer = new QTimer(this);
+    m_interPollTimer->setSingleShot(true);
+    m_interPollTimer->setInterval(300);
+    connect(m_interPollTimer, &QTimer::timeout, this, [this]() {
+        if (!m_cycleActive) return;
+        if (m_pollIndex >= PI_COUNT) {
+            m_cycleActive = false;
+            if (m_autoRefreshCheck->isChecked()) {
+                int secs = m_intervalCombo->currentData().toInt();
+                m_cycleDelayTimer->start(secs * 1000);
+            }
+        } else {
+            const auto& item = pollItems[m_pollIndex];
+            emit pollRequest(item.cmdCode, item.params);
+        }
+    });
+
     connect(m_manualRefreshBtn, &QPushButton::clicked, this, [this]() {
         startCycle();
     });
     connect(m_autoRefreshCheck, &QCheckBox::toggled, this, [this](bool checked) {
         m_intervalCombo->setEnabled(checked);
-        if (!checked)
+        if (!checked) {
             m_cycleDelayTimer->stop();
+            m_interPollTimer->stop();
+        }
     });
 }
 
@@ -403,23 +424,27 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
 
     if (resp.isValid) {
         using FB = FanucFrameBuilder;
+        // NOTE: rawData = frame.mid(10), so offsets = frame_offset - 10
+        // NC direct commands: data at rawData[18], param reads: data at rawData[26]
 
         switch (currentIdx) {
-        case PI_SYSINFO: { // 0x01 系统信息
-            if (data.size() >= 32) {
-                QString ncType = QString::fromLatin1(data.mid(8, 20)).trimmed();
-                qint32 devType = FB::decodeInt32(data, 28);
-                setLabelOK(m_ncTypeLabel, ncType);
-                setLabelOK(m_deviceTypeLabel, QString::number(devType));
+        case PI_SYSINFO: { // 0x01 系统信息 — ncType at rawData[22] (2 chars), deviceType at rawData[24] (2 chars)
+            if (data.size() >= 26) {
+                char ncType[3] = {0};
+                char deviceType[3] = {0};
+                memcpy(ncType, data.constData() + 22, 2);
+                memcpy(deviceType, data.constData() + 24, 2);
+                setLabelOK(m_ncTypeLabel, QString(ncType));
+                setLabelOK(m_deviceTypeLabel, QString(deviceType));
             }
             break;
         }
-        case PI_RUNINFO: { // 0x02 运行信息
-            if (data.size() >= 36) {
-                qint16 mode = FB::decodeInt16(data, 28);
-                qint16 status = FB::decodeInt16(data, 30);
-                qint16 emg = FB::decodeInt16(data, 32);
-                qint16 alm = FB::decodeInt16(data, 34);
+        case PI_RUNINFO: { // 0x02 运行信息 — mode at rawData[18], status at [20], emg at [26], alm at [28]
+            if (data.size() >= 30) {
+                qint16 mode = FB::decodeInt16(data, 18);
+                qint16 status = FB::decodeInt16(data, 20);
+                qint16 emg = FB::decodeInt16(data, 26);
+                qint16 alm = FB::decodeInt16(data, 28);
                 setLabelOK(m_modeLabel, modeStr(mode));
                 setLabelOK(m_runStatusLabel, statusStr(status));
                 setLabelOK(m_emgLabel, emg != 0 ? "是" : "否");
@@ -427,128 +452,149 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
             }
             break;
         }
-        case PI_SPINDLE_SPEED: { // 0x03 主轴速度
-            if (data.size() >= 36) {
-                double val = FB::calcValue(data, 28);
+        case PI_SPINDLE_SPEED: { // 0x03 主轴速度 — calcValue at rawData[18]
+            if (data.size() >= 26) {
+                double val = FB::calcValue(data, 18);
                 setLabelOK(m_spindleSpeedLabel, QString::number(val, 'f', 0) + " RPM");
             }
             break;
         }
-        case PI_SPINDLE_LOAD: { // 0x04 主轴负载
-            if (data.size() >= 36) {
-                qint32 count = FB::decodeInt32(data, 28);
-                if (count >= 1 && data.size() >= 36) {
-                    qint32 loadVal = FB::decodeInt32(data, 32);
-                    setLabelOK(m_spindleLoadLabel, QString::number(loadVal) + "%");
-                }
+        case PI_SPINDLE_LOAD: { // 0x04 主轴负载 — calcValue at rawData[18]
+            if (data.size() >= 26) {
+                double val = FB::calcValue(data, 18);
+                setLabelOK(m_spindleLoadLabel, QString::number(val, 'f', 2) + "%");
             }
             break;
         }
-        case PI_SPINDLE_OVERRIDE: { // 0x05 主轴倍率
-            if (data.size() >= 29) {
-                quint8 val = static_cast<quint8>(data[28]);
+        case PI_SPINDLE_OVERRIDE: { // 0x05 主轴倍率 — byte at rawData[18]
+            if (data.size() >= 19) {
+                quint8 val = static_cast<quint8>(data[18]);
                 setLabelOK(m_spindleOverrideLabel, QString::number(val) + "%");
             }
             break;
         }
-        case PI_SPINDLE_SPEED_SET: { // 0x06 主轴速度设定值
-            if (data.size() >= 32) {
-                qint32 val = FB::decodeInt32(data, 28);
+        case PI_SPINDLE_SPEED_SET: { // 0x06 主轴速度设定值 — int32 at rawData[18]
+            if (data.size() >= 22) {
+                qint32 val = FB::decodeInt32(data, 18);
                 setLabelOK(m_spindleSpeedSetLabel, QString::number(val) + " RPM");
             }
             break;
         }
-        case PI_FEED_RATE: { // 0x07 进给速度
-            if (data.size() >= 36) {
-                double val = FB::calcValue(data, 28);
+        case PI_FEED_RATE: { // 0x07 进给速度 — calcValue at rawData[18]
+            if (data.size() >= 26) {
+                double val = FB::calcValue(data, 18);
                 setLabelOK(m_feedRateLabel, QString::number(val, 'f', 0) + " mm/min");
             }
             break;
         }
-        case PI_FEED_OVERRIDE: { // 0x08 进给倍率
-            if (data.size() >= 29) {
-                quint8 val = static_cast<quint8>(data[28]);
+        case PI_FEED_OVERRIDE: { // 0x08 进给倍率 — 255 - byte at rawData[18]
+            if (data.size() >= 19) {
+                int val = 255 - static_cast<quint8>(data[18]);
                 setLabelOK(m_feedOverrideLabel, QString::number(val) + "%");
             }
             break;
         }
-        case PI_FEED_RATE_SET: { // 0x09 进给速度设定值
-            if (data.size() >= 36) {
-                double val = FB::calcValue(data, 28);
+        case PI_FEED_RATE_SET: { // 0x09 进给速度设定值 — calcValue at rawData[18]
+            if (data.size() >= 26) {
+                double val = FB::calcValue(data, 18);
                 setLabelOK(m_feedRateSetLabel, QString::number(val, 'f', 0) + " mm/min");
             }
             break;
         }
-        case PI_PRODUCTS: { // 0x0A 工件数
-            if (data.size() >= 36) {
-                double val = FB::calcValue(data, 28);
+        case PI_PRODUCTS: { // 0x0A 工件数 — calcValue at rawData[18]
+            if (data.size() >= 26) {
+                double val = FB::calcValue(data, 18);
                 setLabelOK(m_productsLabel, QString::number(val, 'f', 0));
             }
             break;
         }
-        case PI_RUN_TIME: { // 0x0B 运行时间
-            if (data.size() >= 32) {
-                qint32 val = FB::decodeInt32(data, 28);
-                setLabelOK(m_runTimeLabel, formatTime(val));
+        case PI_RUN_TIME: { // 0x0B 运行时间 — multi-block: ms=calcValue(rawData[26]), min=calcValue(rawData[26+block1Len])
+            if (data.size() >= 34) {
+                double ms = FB::calcValue(data, 26);
+                qint16 block1Len = FB::decodeInt16(data, 2);
+                double minutes = 0;
+                if (data.size() >= 26 + block1Len + 8)
+                    minutes = FB::calcValue(data, 26 + block1Len);
+                int seconds = static_cast<int>(minutes) * 60 + static_cast<int>(ms / 1000);
+                setLabelOK(m_runTimeLabel, formatTime(seconds));
             }
             break;
         }
         case PI_CUT_TIME: { // 0x0C 加工时间
-            if (data.size() >= 32) {
-                qint32 val = FB::decodeInt32(data, 28);
-                setLabelOK(m_cutTimeLabel, formatTime(val));
+            if (data.size() >= 34) {
+                double ms = FB::calcValue(data, 26);
+                qint16 block1Len = FB::decodeInt16(data, 2);
+                double minutes = 0;
+                if (data.size() >= 26 + block1Len + 8)
+                    minutes = FB::calcValue(data, 26 + block1Len);
+                int seconds = static_cast<int>(minutes) * 60 + static_cast<int>(ms / 1000);
+                setLabelOK(m_cutTimeLabel, formatTime(seconds));
             }
             break;
         }
         case PI_CYCLE_TIME: { // 0x0D 循环时间
-            if (data.size() >= 32) {
-                qint32 val = FB::decodeInt32(data, 28);
-                setLabelOK(m_cycleTimeLabel, formatTime(val));
+            if (data.size() >= 34) {
+                double ms = FB::calcValue(data, 26);
+                qint16 block1Len = FB::decodeInt16(data, 2);
+                double minutes = 0;
+                if (data.size() >= 26 + block1Len + 8)
+                    minutes = FB::calcValue(data, 26 + block1Len);
+                int seconds = static_cast<int>(minutes) * 60 + static_cast<int>(ms / 1000);
+                setLabelOK(m_cycleTimeLabel, formatTime(seconds));
             }
             break;
         }
-        case PI_POWERON_TIME: { // 0x0E 上电时间
-            if (data.size() >= 32) {
-                qint32 val = FB::decodeInt32(data, 28);
-                setLabelOK(m_powerOnTimeLabel, formatTime(val));
+        case PI_POWERON_TIME: { // 0x0E 上电时间 — single param: calcValue at rawData[26], min*60
+            if (data.size() >= 34) {
+                double minutes = FB::calcValue(data, 26);
+                int seconds = static_cast<int>(minutes) * 60;
+                setLabelOK(m_powerOnTimeLabel, formatTime(seconds));
             }
             break;
         }
-        case PI_PROG_NUM: { // 0x0F 程序号
-            if (data.size() >= 32) {
-                qint32 progNo = FB::decodeInt32(data, 28);
+        case PI_PROG_NUM: { // 0x0F 程序号 — int32 at rawData[18]
+            if (data.size() >= 22) {
+                qint32 progNo = FB::decodeInt32(data, 18);
                 setLabelOK(m_progNumLabel, "O" + QString::number(progNo));
             }
             break;
         }
-        case PI_TOOL_NUM: { // 0x10 刀具号
-            if (data.size() >= 36) {
-                double val = FB::calcValue(data, 28);
+        case PI_TOOL_NUM: { // 0x10 刀具号 — calcValue at rawData[18]
+            if (data.size() >= 26) {
+                double val = FB::calcValue(data, 18);
                 setLabelOK(m_toolNumLabel, "T" + QString::number(val, 'f', 0));
             }
             break;
         }
-        case PI_ALARM: { // 0x11 告警信息
-            if (data.size() >= 32) {
-                qint32 almCount = FB::decodeInt32(data, 28);
-                if (almCount <= 0) {
+        case PI_ALARM: { // 0x11 告警 — dataLength at rawData[14], num=dataLen/48, each 48B
+            if (data.size() >= 22) {
+                qint32 dataLength = FB::decodeInt32(data, 14);
+                unsigned int num = static_cast<unsigned int>(dataLength) / 48;
+                if (num == 0) {
                     m_alarmDisplay->clear();
                     m_alarmDisplay->setPlaceholderText("无告警");
                 } else {
                     QStringList alarms;
-                    int offset = 32;
-                    for (qint32 i = 0; i < almCount && offset + 8 <= data.size(); ++i) {
-                        qint32 almNo = FB::decodeInt32(data, offset);
-                        qint32 almType = FB::decodeInt32(data, offset + 4);
-                        alarms << QStringLiteral("No.%1 (Type:%2)").arg(almNo).arg(almType);
-                        offset += 8;
+                    for (unsigned int i = 0; i < num; ++i) {
+                        int base = 18 + static_cast<int>(i) * 48;
+                        if (base + 48 > data.size()) break;
+                        qint32 almNo = FB::decodeInt32(data, base);
+                        qint32 almType = FB::decodeInt32(data, base + 4);
+                        qint32 almLen = FB::decodeInt32(data, base + 12);
+                        if (almLen > 0 && almLen <= 32) {
+                            QByteArray msg = data.mid(base + 16, almLen);
+                            alarms << QStringLiteral("No.%1 (Type:%2) %3")
+                                      .arg(almNo).arg(almType).arg(QString::fromLatin1(msg));
+                        } else {
+                            alarms << QStringLiteral("No.%1 (Type:%2)").arg(almNo).arg(almType);
+                        }
                     }
                     m_alarmDisplay->setText(alarms.join("\n"));
                 }
             }
             break;
         }
-        case PI_POS_ABS:   // 0x12 绝对坐标
+        case PI_POS_ABS:   // 0x12 绝对坐标 — x=calcValue(rawData[18]), y=calcValue(rawData[26]), z=calcValue(rawData[34])
         case PI_POS_MACH:  // 0x13 机械坐标
         case PI_POS_REL:   // 0x14 相对坐标
         case PI_POS_RES: { // 0x15 剩余距离坐标
@@ -561,13 +607,16 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
             default: break;
             }
             if (!targetLabels) break;
-            if (data.size() >= 32) {
-                qint32 axisCount = FB::decodeInt32(data, 28);
-                int offset = 32;
-                for (qint32 i = 0; i < axisCount && i < 3 && offset + 8 <= data.size(); ++i) {
-                    double val = FB::calcValue(data, offset);
-                    setLabelOK(targetLabels[i], QString::number(val, 'f', 3));
-                    offset += 8;
+            if (data.size() >= 26) {
+                double x = FB::calcValue(data, 18);
+                setLabelOK(targetLabels[0], QString::number(x, 'f', 3));
+                if (data.size() >= 34) {
+                    double y = FB::calcValue(data, 26);
+                    setLabelOK(targetLabels[1], QString::number(y, 'f', 3));
+                }
+                if (data.size() >= 42) {
+                    double z = FB::calcValue(data, 34);
+                    setLabelOK(targetLabels[2], QString::number(z, 'f', 3));
                 }
             }
             break;
@@ -619,7 +668,7 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
         }
     }
 
-    // Advance to next poll item
+    // Advance to next poll item (with inter-poll delay for device stability)
     m_pollIndex++;
     if (m_pollIndex >= PI_COUNT) {
         // Cycle complete
@@ -629,9 +678,8 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
             m_cycleDelayTimer->start(secs * 1000);
         }
     } else {
-        // Send next poll item
-        const auto& item = pollItems[m_pollIndex];
-        emit pollRequest(item.cmdCode, item.params);
+        // Delay before sending next request to prevent device disconnection
+        m_interPollTimer->start();
     }
 }
 
@@ -648,6 +696,7 @@ void FanucRealtimeWidget::startPolling()
 void FanucRealtimeWidget::stopPolling()
 {
     m_cycleDelayTimer->stop();
+    m_interPollTimer->stop();
     m_cycleActive = false;
 }
 

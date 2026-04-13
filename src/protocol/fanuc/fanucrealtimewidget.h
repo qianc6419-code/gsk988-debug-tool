@@ -94,6 +94,7 @@ private:
 
     // Polling state
     QTimer* m_cycleDelayTimer;
+    QTimer* m_interPollTimer;  // delay between individual poll commands
     int m_pollIndex;
     bool m_cycleActive;
 

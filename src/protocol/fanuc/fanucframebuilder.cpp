@@ -135,8 +135,8 @@ QByteArray FanucFrameBuilder::buildReadPMCBlock(char addrType, int startAddr, in
     // padding (4B)
     params.append(4, '\0');
 
-    // PMC read: ncFlag=0x0101, blockFuncCode=0x8001
-    return buildBlock(0x0101, 0x8001, params);
+    // PMC read: ncFlag=0x0002 (PMC), blockFuncCode=0x8001
+    return buildBlock(0x0002, 0x8001, params);
 }
 
 QByteArray FanucFrameBuilder::buildWritePMCBlockByte(char addrType, int startAddr, int endAddr,
@@ -158,7 +158,7 @@ QByteArray FanucFrameBuilder::buildWritePMCBlockByte(char addrType, int startAdd
     params.append(encodeInt32(0x00000001));
 
     // Build the 28B header block, then append value
-    QByteArray block = buildBlock(0x0101, 0x8002, params);
+    QByteArray block = buildBlock(0x0002, 0x8002, params);
     block.resize(28); // trim any excess from leftJustified, ensure exactly 28
     block.append(static_cast<char>(value));
 
@@ -180,7 +180,7 @@ QByteArray FanucFrameBuilder::buildWritePMCBlockWord(char addrType, int startAdd
     // dataLen = 2
     params.append(encodeInt32(0x00000002));
 
-    QByteArray block = buildBlock(0x0101, 0x8002, params);
+    QByteArray block = buildBlock(0x0002, 0x8002, params);
     block.resize(28);
     block.append(encodeInt16(value));
 
@@ -202,7 +202,7 @@ QByteArray FanucFrameBuilder::buildWritePMCBlockLong(char addrType, int startAdd
     // dataLen = 4
     params.append(encodeInt32(0x00000004));
 
-    QByteArray block = buildBlock(0x0101, 0x8002, params);
+    QByteArray block = buildBlock(0x0002, 0x8002, params);
     block.resize(28);
     block.append(encodeInt32(value));
 
@@ -224,7 +224,7 @@ QByteArray FanucFrameBuilder::buildWritePMCBlockFloat(char addrType, int startAd
     // dataLen = 4
     params.append(encodeInt32(0x00000004));
 
-    QByteArray block = buildBlock(0x0101, 0x8002, params);
+    QByteArray block = buildBlock(0x0002, 0x8002, params);
     block.resize(28);
     // Encode float as 4 bytes big-endian
     QByteArray floatBytes;
@@ -248,8 +248,8 @@ QByteArray FanucFrameBuilder::buildReadMacroBlock(int addr)
     // zeros (12B)
     params.append(12, '\0');
 
-    // Read macro: ncFlag=0x0101, blockFuncCode=0x0015
-    return buildBlock(0x0101, 0x0015, params);
+    // Read macro: ncFlag=0x0001 (NC), blockFuncCode=0x0015
+    return buildBlock(0x0001, 0x0015, params);
 }
 
 QByteArray FanucFrameBuilder::buildWriteMacroBlock(int addr, int numerator, quint8 precision)
@@ -268,7 +268,7 @@ QByteArray FanucFrameBuilder::buildWriteMacroBlock(int addr, int numerator, quin
     params = params.leftJustified(20, '\0', true);
 
     // Build the 28B block header
-    QByteArray block = buildBlock(0x0101, 0x0016, params);
+    QByteArray block = buildBlock(0x0001, 0x0016, params);
     block.resize(28);
 
     // Append 8 extra bytes: numerator(4B) + denomBase(2B)=0x000A + precision(2B)
@@ -290,8 +290,8 @@ QByteArray FanucFrameBuilder::buildReadParamBlock(int paramNo)
     // zeros (12B)
     params.append(12, '\0');
 
-    // Read param: ncFlag=0x0101, blockFuncCode=0x0001
-    return buildBlock(0x0101, 0x0001, params);
+    // Read param: ncFlag=0x0001 (NC), blockFuncCode=0x008D
+    return buildBlock(0x0001, 0x008D, params);
 }
 
 QByteArray FanucFrameBuilder::buildPositionBlock(quint8 posType)
@@ -305,8 +305,8 @@ QByteArray FanucFrameBuilder::buildPositionBlock(quint8 posType)
     // zeros (12B)
     params.append(12, '\0');
 
-    // Position: ncFlag=0x0101, blockFuncCode=0x0081
-    return buildBlock(0x0101, 0x0081, params);
+    // Position: ncFlag=0x0001 (NC), blockFuncCode=0x0026
+    return buildBlock(0x0001, 0x0026, params);
 }
 
 // ---------------------------------------------------------------------------

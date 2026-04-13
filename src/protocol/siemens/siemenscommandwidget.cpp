@@ -16,8 +16,6 @@ SiemensCommandWidget::SiemensCommandWidget(QWidget* parent)
 
 void SiemensCommandWidget::setupUI()
 {
-    auto* mainLayout = new QHBoxLayout(this);
-
     // === Left: command table ===
     auto* leftLayout = new QVBoxLayout;
 

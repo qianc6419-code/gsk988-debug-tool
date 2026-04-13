@@ -22,6 +22,9 @@ class ModbusRealtimeWidget;
 class ModbusCommandWidget;
 class FanucRealtimeWidget;
 class FanucCommandWidget;
+class SiemensRealtimeWidget;
+class SiemensCommandWidget;
+class SiemensProtocol;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT

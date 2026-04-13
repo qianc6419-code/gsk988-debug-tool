@@ -32,6 +32,12 @@ SOURCES += \
     src/protocol/fanuc/fanucrealtimewidget.cpp \
     src/protocol/fanuc/fanuccommandwidget.cpp \
     src/protocol/fanuc/fanucparsewidget.cpp \
+    src/protocol/siemens/siemensframebuilder.cpp \
+    src/protocol/siemens/siemensprotocol.cpp \
+    src/protocol/siemens/siemenswidgetfactory.cpp \
+    src/protocol/siemens/siemensrealtimewidget.cpp \
+    src/protocol/siemens/siemenscommandwidget.cpp \
+    src/protocol/siemens/siemensparsewidget.cpp \
     src/ui/logwidget.cpp
 
 HEADERS += \
@@ -59,5 +65,11 @@ HEADERS += \
     src/protocol/fanuc/fanucrealtimewidget.h \
     src/protocol/fanuc/fanuccommandwidget.h \
     src/protocol/fanuc/fanucparsewidget.h \
+    src/protocol/siemens/siemensframebuilder.h \
+    src/protocol/siemens/siemensprotocol.h \
+    src/protocol/siemens/siemenswidgetfactory.h \
+    src/protocol/siemens/siemensrealtimewidget.h \
+    src/protocol/siemens/siemenscommandwidget.h \
+    src/protocol/siemens/siemensparsewidget.h \
     src/ui/iprotocolwidgetfactory.h \
     src/ui/logwidget.h

@@ -207,10 +207,10 @@ QByteArray FanucProtocol::buildRequest(quint8 cmdCode, const QByteArray& params)
     }
     case 0x11: { // 告警信息
         QByteArray p;
-        p.append(FB::encodeInt32(-1));   // info type = -1
-        p.append(FB::encodeInt32(9));    // data type = 9
-        p.append(FB::encodeInt32(1));    // alarm type
-        p.append(FB::encodeInt32(32));   // max count
+        p.append(FB::encodeInt32(-1));   // info type = -1 (all types)
+        p.append(FB::encodeInt32(9));    // data type = 9 (alarm count)
+        p.append(FB::encodeInt32(1));    // start position = 1
+        p.append(FB::encodeInt32(32));   // alarm content length = 32
         p.append(QByteArray(4, '\0'));
         return FB::buildSingleBlockRequest(1, 0x23, p);
     }
@@ -332,18 +332,22 @@ ParsedResponse FanucProtocol::parseResponse(const QByteArray& frame)
     if (!FanucFrameBuilder::validateHeader(frame))
         return result;
 
-    QByteArray funcCode = frame.mid(4, 4);
-    using FB = FanucFrameBuilder;
+    // Frame bytes 4-5 are sequence number (varies, don't check).
+    // Frame bytes 6-7 are the actual function code:
+    //   0x21 0x01 = data request,  0x21 0x02 = data response
+    //   0x01 0x01 = handshake req,  0x01 0x02 = handshake resp
+    // Reference implementation only checks bytes 6-7.
+    if (frame.size() < 8)
+        return result;
 
-    // Response function codes (seen by client receiving mock/real device data)
-    static const QByteArray FUNC_HANDSHAKE_RESP("\x00\x01\x01\x02", 4);
-    bool isResponse = (funcCode == FB::FUNC_RESPONSE) ||
-                      (funcCode == FUNC_HANDSHAKE_RESP);
+    quint8 b6 = static_cast<quint8>(frame[6]);
+    quint8 b7 = static_cast<quint8>(frame[7]);
 
-    // Request function codes (seen by mock server receiving client requests)
-    static const QByteArray FUNC_HANDSHAKE_REQ("\x00\x01\x01\x01", 4);
-    bool isRequest = (funcCode == FB::FUNC_READ) ||
-                     (funcCode == FUNC_HANDSHAKE_REQ);
+    bool isResponse = (b6 == 0x21 && b7 == 0x02) ||   // data response
+                      (b6 == 0x01 && b7 == 0x02);      // handshake response
+
+    bool isRequest =  (b6 == 0x21 && b7 == 0x01) ||   // data request
+                      (b6 == 0x01 && b7 == 0x01);      // handshake request
 
     if (!isResponse && !isRequest)
         return result;
@@ -351,11 +355,10 @@ ParsedResponse FanucProtocol::parseResponse(const QByteArray& frame)
     result.isValid = true;
     result.rawData = frame.mid(10);
 
-    // For request frames (processed by mock server), provide the stored cmdCode
-    if (isRequest) {
-        result.cmdCode = m_lastRequestCmdCode;
-    }
-    // For response frames, cmdCode stays 0 (FanucRealtimeWidget tracks via m_pollIndex)
+    // Both request and response frames: use the stored cmdCode.
+    // Fanuc FOCAS is strictly request-response, so m_lastRequestCmdCode
+    // is always valid when the matching response arrives.
+    result.cmdCode = m_lastRequestCmdCode;
 
     return result;
 }
@@ -365,6 +368,17 @@ ParsedResponse FanucProtocol::parseResponse(const QByteArray& frame)
 QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
 {
     using FB = FanucFrameBuilder;
+
+    // NOTE: rawData = frame.mid(10), so all offsets are frame_offset - 10.
+    // Reference implementation uses frame-level offsets:
+    //   frame[0-9]  = header (A0x4 + funcCode(4) + dataLen(2))
+    //   frame[10-11] = block count
+    //   frame[12-13] = block1 length
+    //   frame[14-15] = block1 ncFlag
+    //   frame[16-17] = block1 reserved
+    //   frame[18-19] = block1 funcCode
+    //   frame[20+]  = block1 params + data
+    // rawData offsets = frame offsets - 10
 
     auto hexDump = [](const QByteArray& ba) -> QString {
         QStringList hex;
@@ -377,82 +391,90 @@ QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
         return QStringLiteral("(无数据)");
 
     switch (cmdCode) {
-    case 0x01: { // 系统信息
-        if (data.size() < 34) return hexDump(data);
-        // Response block: 28B header + data
-        // NC type string at block offset 8..27 (20 bytes), device type at block offset 28..31
-        QString ncType = QString::fromLatin1(data.mid(8, 20)).trimmed();
-        qint32 devType = FB::decodeInt32(data, 28);
-        return QStringLiteral("NC型号: %1, 设备类型: %2").arg(ncType).arg(devType);
+    case 0x01: { // 系统信息 — ref: ncType at frame[32] (2 chars), deviceType at frame[34] (2 chars)
+        if (data.size() < 26) return hexDump(data);
+        char ncType[3] = {0};
+        char deviceType[3] = {0};
+        memcpy(ncType, data.constData() + 22, 2);
+        memcpy(deviceType, data.constData() + 24, 2);
+        return QStringLiteral("NC型号: %1, 设备类型: %2").arg(QString(ncType)).arg(QString(deviceType));
     }
-    case 0x02: { // 运行信息
-        if (data.size() < 38) return hexDump(data);
-        // Block header 28B, then: mode(2B), status(2B), emergency(2B), alarm(2B)
-        qint16 mode = FB::decodeInt16(data, 28);
-        qint16 status = FB::decodeInt16(data, 30);
-        qint16 emg = FB::decodeInt16(data, 32);
-        qint16 alm = FB::decodeInt16(data, 34);
+    case 0x02: { // 运行信息 — ref: mode at frame[28], status at frame[30], emg at frame[36], alm at frame[38]
+        if (data.size() < 30) return hexDump(data);
+        qint16 mode = FB::decodeInt16(data, 18);
+        qint16 status = FB::decodeInt16(data, 20);
+        qint16 emg = FB::decodeInt16(data, 26);
+        qint16 alm = FB::decodeInt16(data, 28);
         QString modeStr;
         switch (mode) {
         case 0: modeStr = QStringLiteral("MDI"); break;
         case 1: modeStr = QStringLiteral("MEM"); break;
-        case 3: modeStr = QStringLiteral("NO SEARCH"); break;
-        case 4: modeStr = QStringLiteral("EDIT"); break;
-        case 5: modeStr = QStringLiteral("HANDLE"); break;
-        case 7: modeStr = QStringLiteral("INC"); break;
-        case 8: modeStr = QStringLiteral("JOG"); break;
-        case 11: modeStr = QStringLiteral("REF"); break;
+        case 3: modeStr = QStringLiteral("EDT"); break;
+        case 4: modeStr = QStringLiteral("HAND"); break;
+        case 5: modeStr = QStringLiteral("JOG"); break;
+        case 10: modeStr = QStringLiteral("TAPE"); break;
         default: modeStr = QString::number(mode); break;
         }
+        QString statusStr;
+        switch (status) {
+        case 0: statusStr = QStringLiteral("RESET"); break;
+        case 1: statusStr = QStringLiteral("STOP"); break;
+        case 2: statusStr = QStringLiteral("HOLD"); break;
+        case 3: statusStr = QStringLiteral("START"); break;
+        case 4: statusStr = QStringLiteral("MSTR"); break;
+        default: statusStr = QString::number(status); break;
+        }
         return QStringLiteral("模式: %1, 状态: %2, 急停: %3, 告警: %4")
-                   .arg(modeStr).arg(status).arg(emg).arg(alm);
+                   .arg(modeStr).arg(statusStr).arg(emg).arg(alm);
     }
-    case 0x03: // 主轴速度
-    case 0x07: { // 进给速度
-        if (data.size() < 36) return hexDump(data);
-        double val = FB::calcValue(data, 28);
+    case 0x03: // 主轴速度 — ref: calcValue at frame[28]
+    case 0x07: { // 进给速度 — ref: calcValue at frame[28]
+        if (data.size() < 26) return hexDump(data);
+        double val = FB::calcValue(data, 18);
         return QStringLiteral("%1: %2").arg(cmdCode == 0x03 ? "主轴速度" : "进给速度")
-                                       .arg(val, 0, 'f', 1);
+                                       .arg(val, 0, 'f', 2);
     }
-    case 0x04: { // 主轴负载
-        if (data.size() < 40) return hexDump(data);
-        qint32 count = FB::decodeInt32(data, 28);
-        if (count < 1) return hexDump(data);
-        qint32 loadVal = FB::decodeInt32(data, 32);
-        return QStringLiteral("主轴负载: %1%").arg(loadVal);
+    case 0x04: { // 主轴负载 — ref: calcValue at frame[28]
+        if (data.size() < 26) return hexDump(data);
+        double val = FB::calcValue(data, 18);
+        return QStringLiteral("主轴负载: %1%").arg(val, 0, 'f', 2);
     }
-    case 0x05: { // 主轴倍率
-        if (data.size() < 32) return hexDump(data);
-        quint8 val = static_cast<quint8>(data[28]);
+    case 0x05: { // 主轴倍率 — ref: data[28] as byte
+        if (data.size() < 19) return hexDump(data);
+        quint8 val = static_cast<quint8>(data[18]);
         return QStringLiteral("主轴倍率: %1%").arg(val);
     }
-    case 0x06: { // 主轴速度设定值
-        if (data.size() < 32) return hexDump(data);
-        qint32 val = FB::decodeInt32(data, 28);
+    case 0x06: { // 主轴速度设定值 — ref: getIntValue at frame[28]
+        if (data.size() < 22) return hexDump(data);
+        qint32 val = FB::decodeInt32(data, 18);
         return QStringLiteral("主轴速度设定值: %1").arg(val);
     }
-    case 0x08: { // 进给倍率
-        if (data.size() < 32) return hexDump(data);
-        quint8 val = static_cast<quint8>(data[28]);
+    case 0x08: { // 进给倍率 — ref: 255 - data[28]
+        if (data.size() < 19) return hexDump(data);
+        int val = 255 - static_cast<quint8>(data[18]);
         return QStringLiteral("进给倍率: %1%").arg(val);
     }
-    case 0x09: { // 进给速度设定值 (macro variable)
-        if (data.size() < 40) return hexDump(data);
-        double val = FB::calcValue(data, 28);
-        return QStringLiteral("进给速度设定值: %1").arg(val, 0, 'f', 1);
+    case 0x09: { // 进给速度设定值 (macro) — ref: calcValue at frame[28]
+        if (data.size() < 26) return hexDump(data);
+        double val = FB::calcValue(data, 18);
+        return QStringLiteral("进给速度设定值: %1").arg(val, 0, 'f', 2);
     }
-    case 0x0A: { // 工件数 (macro variable)
-        if (data.size() < 40) return hexDump(data);
-        double val = FB::calcValue(data, 28);
+    case 0x0A: { // 工件数 (macro) — ref: calcValue at frame[28]
+        if (data.size() < 26) return hexDump(data);
+        double val = FB::calcValue(data, 18);
         return QStringLiteral("工件数: %1").arg(val, 0, 'f', 0);
     }
-    case 0x0B: // 运行时间 (param 6751+6752)
+    case 0x0B: // 运行时间 (param 6751+6752, 2 blocks) — ref: calcValue at frame[36], second at frame[36+block1Len]
     case 0x0C: // 加工时间 (param 6753+6754)
-    case 0x0D: // 循环时间 (param 6757+6758)
-    case 0x0E: { // 上电时间 (param 6750)
-        if (data.size() < 36) return hexDump(data);
-        qint32 val = FB::decodeInt32(data, 28);
-        int seconds = val;
+    case 0x0D: { // 循环时间 (param 6757+6758)
+        if (data.size() < 34) return hexDump(data);
+        // Multi-block param read: block header is 24 bytes, data at offset 26
+        double ms = FB::calcValue(data, 26);
+        qint16 block1Len = FB::decodeInt16(data, 2);
+        double minutes = 0;
+        if (data.size() >= 26 + block1Len + 8)
+            minutes = FB::calcValue(data, 26 + block1Len);
+        int seconds = static_cast<int>(minutes) * 60 + static_cast<int>(ms / 1000);
         int hours = seconds / 3600;
         int mins = (seconds % 3600) / 60;
         int secs = seconds % 60;
@@ -461,7 +483,6 @@ QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
         case 0x0B: label = QStringLiteral("运行时间"); break;
         case 0x0C: label = QStringLiteral("加工时间"); break;
         case 0x0D: label = QStringLiteral("循环时间"); break;
-        case 0x0E: label = QStringLiteral("上电时间"); break;
         default: label = QStringLiteral("时间"); break;
         }
         return QStringLiteral("%1: %2:%3:%4 (%5秒)")
@@ -471,46 +492,60 @@ QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
                    .arg(secs, 2, 10, QChar('0'))
                    .arg(seconds);
     }
-    case 0x0F: { // 程序号
-        if (data.size() < 36) return hexDump(data);
-        qint32 progNo = FB::decodeInt32(data, 28);
+    case 0x0E: { // 上电时间 (param 6750, 1 block) — ref: calcValue at frame[36], min*60
+        if (data.size() < 34) return hexDump(data);
+        double minutes = FB::calcValue(data, 26);
+        int seconds = static_cast<int>(minutes) * 60;
+        int hours = seconds / 3600;
+        int mins = (seconds % 3600) / 60;
+        int secs = seconds % 60;
+        return QStringLiteral("上电时间: %1:%2:%3 (%4秒)")
+                   .arg(hours, 2, 10, QChar('0'))
+                   .arg(mins, 2, 10, QChar('0'))
+                   .arg(secs, 2, 10, QChar('0'))
+                   .arg(seconds);
+    }
+    case 0x0F: { // 程序号 — ref: getIntValue at frame[28]
+        if (data.size() < 22) return hexDump(data);
+        qint32 progNo = FB::decodeInt32(data, 18);
         return QStringLiteral("程序号: O%1").arg(progNo);
     }
-    case 0x10: { // 刀具号 (macro variable)
-        if (data.size() < 40) return hexDump(data);
-        double val = FB::calcValue(data, 28);
+    case 0x10: { // 刀具号 (macro) — ref: calcValue at frame[28]
+        if (data.size() < 26) return hexDump(data);
+        double val = FB::calcValue(data, 18);
         return QStringLiteral("刀具号: T%1").arg(val, 0, 'f', 0);
     }
-    case 0x11: { // 告警信息
-        if (data.size() < 32) return hexDump(data);
-        qint32 almCount = FB::decodeInt32(data, 28);
-        if (almCount <= 0)
+    case 0x11: { // 告警信息 — ref: dataLength at frame[24], num=dataLen/48, each 48B
+        if (data.size() < 22) return hexDump(data);
+        qint32 dataLength = FB::decodeInt32(data, 14);
+        unsigned int num = static_cast<unsigned int>(dataLength) / 48;
+        if (num == 0)
             return QStringLiteral("告警: 无");
         QStringList alarms;
-        int offset = 32;
-        for (qint32 i = 0; i < almCount && offset + 8 <= data.size(); ++i) {
-            qint32 almNo = FB::decodeInt32(data, offset);
-            qint32 almType = FB::decodeInt32(data, offset + 4);
-            alarms << QStringLiteral("No.%1(Type:%2)").arg(almNo).arg(almType);
-            offset += 8;
+        for (unsigned int i = 0; i < num; ++i) {
+            int base = 18 + static_cast<int>(i) * 48;
+            if (base + 48 > data.size()) break;
+            qint32 almNo = FB::decodeInt32(data, base);
+            qint32 almType = FB::decodeInt32(data, base + 4);
+            qint32 almLen = FB::decodeInt32(data, base + 12);
+            if (almLen > 0 && almLen <= 32) {
+                QByteArray msg = data.mid(base + 16, almLen);
+                alarms << QStringLiteral("No.%1 (Type:%2) %3")
+                          .arg(almNo).arg(almType).arg(QString::fromLatin1(msg));
+            } else {
+                alarms << QStringLiteral("No.%1 (Type:%2)").arg(almNo).arg(almType);
+            }
         }
-        return QStringLiteral("告警(%1条): %2").arg(almCount).arg(alarms.join(", "));
+        return QStringLiteral("告警(%1条): %2").arg(num).arg(alarms.join("\n"));
     }
-    case 0x12: // 绝对坐标
+    case 0x12: // 绝对坐标 — ref: x=calcValue(frame+28), y=calcValue(frame+36), z=calcValue(frame+44)
     case 0x13: // 机械坐标
     case 0x14: // 相对坐标
     case 0x15: { // 剩余距离坐标
-        if (data.size() < 36) return hexDump(data);
-        qint32 axisCount = FB::decodeInt32(data, 28);
-        QStringList coords;
-        int offset = 32;
-        static const char axisNames[] = {'X', 'Y', 'Z', 'A', 'B', 'C', 'U', 'V', 'W'};
-        for (qint32 i = 0; i < axisCount && offset + 8 <= data.size(); ++i) {
-            double val = FB::calcValue(data, offset);
-            char axis = (i < 9) ? axisNames[i] : ('0' + static_cast<char>(i));
-            coords << QStringLiteral("%1=%2").arg(axis).arg(val, 0, 'f', 3);
-            offset += 8;
-        }
+        if (data.size() < 34) return hexDump(data);
+        double x = FB::calcValue(data, 18);
+        double y = (data.size() >= 34) ? FB::calcValue(data, 26) : 0.0;
+        double z = (data.size() >= 42) ? FB::calcValue(data, 34) : 0.0;
         QString label;
         switch (cmdCode) {
         case 0x12: label = QStringLiteral("绝对坐标"); break;
@@ -519,50 +554,54 @@ QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
         case 0x15: label = QStringLiteral("剩余距离坐标"); break;
         default: label = QStringLiteral("坐标"); break;
         }
-        return QStringLiteral("%1(%2轴): %3").arg(label).arg(axisCount).arg(coords.join(", "));
+        return QStringLiteral("%1: X=%2, Y=%3, Z=%4")
+                   .arg(label)
+                   .arg(x, 0, 'f', 3)
+                   .arg(y, 0, 'f', 3)
+                   .arg(z, 0, 'f', 3);
     }
-    case 0x16: { // 读宏变量
-        if (data.size() < 40) return hexDump(data);
-        double val = FB::calcValue(data, 28);
+    case 0x16: { // 读宏变量 — ref: calcValue at frame[28]
+        if (data.size() < 26) return hexDump(data);
+        double val = FB::calcValue(data, 18);
         return QStringLiteral("宏变量值: %1").arg(val, 0, 'f', 4);
     }
     case 0x17: { // 写宏变量
-        if (data.size() < 40) return hexDump(data);
-        double val = FB::calcValue(data, 28);
-        return QStringLiteral("写入结果: %1").arg(val, 0, 'f', 4);
+        if (data.size() < 26) return hexDump(data);
+        return QStringLiteral("宏变量写入成功");
     }
-    case 0x18: { // 读PMC
-        if (data.size() < 32) return hexDump(data);
-        // Response data after block header
-        QByteArray pmcData = data.mid(28);
+    case 0x18: { // 读PMC — ref: data[28] for byte, or word/long/float
+        if (data.size() < 19) return hexDump(data);
+        QByteArray pmcData = data.mid(18);
         if (pmcData.size() == 1)
             return QStringLiteral("PMC值: %1 (0x%2)")
                        .arg(static_cast<quint8>(pmcData[0]))
                        .arg(static_cast<quint8>(pmcData[0]), 2, 16, QChar('0')).toUpper();
-        if (pmcData.size() == 2) {
-            qint16 val = FB::decodeInt16(pmcData, 0);
-            return QStringLiteral("PMC值: %1 (0x%2)")
-                       .arg(val)
-                       .arg(static_cast<quint16>(val), 4, 16, QChar('0')).toUpper();
+        if (pmcData.size() >= 2) {
+            // Read as little-endian (reference swaps bytes)
+            union { unsigned char b[2]; short v; } u_word;
+            u_word.b[0] = static_cast<unsigned char>(pmcData[1]);
+            u_word.b[1] = static_cast<unsigned char>(pmcData[0]);
+            if (pmcData.size() == 2)
+                return QStringLiteral("PMC值: %1").arg(u_word.v);
         }
-        if (pmcData.size() == 4) {
-            qint32 val = FB::decodeInt32(pmcData, 0);
-            return QStringLiteral("PMC值: %1 (0x%2)")
-                       .arg(val)
-                       .arg(val, 8, 16, QChar('0')).toUpper();
+        if (pmcData.size() >= 4) {
+            union { unsigned char b[4]; long v; } u_long;
+            u_long.b[0] = static_cast<unsigned char>(pmcData[3]);
+            u_long.b[1] = static_cast<unsigned char>(pmcData[2]);
+            u_long.b[2] = static_cast<unsigned char>(pmcData[1]);
+            u_long.b[3] = static_cast<unsigned char>(pmcData[0]);
+            return QStringLiteral("PMC值: %1").arg(u_long.v);
         }
         return QStringLiteral("PMC数据: %1").arg(hexDump(pmcData));
     }
     case 0x19: { // 写PMC
-        if (data.size() < 32) return hexDump(data);
+        if (data.size() < 19) return hexDump(data);
         return QStringLiteral("PMC写入成功");
     }
-    case 0x1A: { // 读参数
-        if (data.size() < 40) return hexDump(data);
-        qint32 val = FB::decodeInt32(data, 28);
-        return QStringLiteral("参数值: %1 (0x%2)")
-                   .arg(val)
-                   .arg(val, 8, 16, QChar('0')).toUpper();
+    case 0x1A: { // 读参数 — ref: calcValue at frame[36] (param block has 24-byte header)
+        if (data.size() < 34) return hexDump(data);
+        double val = FB::calcValue(data, 26);
+        return QStringLiteral("参数值: %1").arg(val, 0, 'f', 4);
     }
     default:
         return QStringLiteral("HEX: %1").arg(hexDump(data));
@@ -575,269 +614,231 @@ QString FanucProtocol::interpretData(quint8 cmdCode, const QByteArray& data) con
 }
 
 // ========== Mock Response Data (internal payload) ==========
+//
+// The payload becomes rawData = frame.mid(10), so offsets must match:
+//   rawData[0-1]  = block count
+//   rawData[2-3]  = block 1 length
+//   rawData[4-5]  = block 1 ncFlag
+//   rawData[6-7]  = block 1 reserved
+//   rawData[8-9]  = block 1 funcCode
+//   rawData[10+]  = block 1 params + data
+//
+// NC direct commands: data at rawData[18] (block header 16 bytes)
+// Param read commands: data at rawData[26] (block header 24 bytes)
+
+// Helper: build a response block with 8-byte params (NC direct commands)
+// Returns: block_count(2B) + block(length(2B)+ncFlag(2B)+reserved(2B)+funcCode(2B)+params(8B)+data)
+static QByteArray buildMockNCBlock(quint16 funcCode, const QByteArray& data)
+{
+    QByteArray payload;
+    payload.reserve(2 + 16 + data.size());
+    // Block count
+    payload.append('\x00');
+    payload.append('\x01');
+    // Block length = 16 header + data size
+    quint16 blockLen = static_cast<quint16>(16 + data.size());
+    payload.append(FanucFrameBuilder::encodeInt16(blockLen));
+    // ncFlag
+    payload.append('\x00');
+    payload.append('\x01');
+    // reserved
+    payload.append('\x00');
+    payload.append('\x01');
+    // funcCode
+    payload.append(FanucFrameBuilder::encodeInt16(funcCode));
+    // 8 bytes params area
+    payload.append(QByteArray(8, '\0'));
+    // data
+    payload.append(data);
+    return payload;
+}
+
+// Helper: build a response block with 16-byte params (param read commands)
+// Returns: block_count(2B) + block(length(2B)+ncFlag(2B)+reserved(2B)+funcCode(2B)+params(16B)+data)
+static QByteArray buildMockParamBlock(const QByteArray& data)
+{
+    QByteArray payload;
+    payload.reserve(2 + 24 + data.size());
+    // Block count
+    payload.append('\x00');
+    payload.append('\x01');
+    // Block length = 24 header + data size
+    quint16 blockLen = static_cast<quint16>(24 + data.size());
+    payload.append(FanucFrameBuilder::encodeInt16(blockLen));
+    // ncFlag
+    payload.append('\x00');
+    payload.append('\x01');
+    // reserved
+    payload.append('\x00');
+    payload.append('\x01');
+    // funcCode = 0x008D (param read)
+    payload.append('\x00');
+    payload.append(static_cast<char>(0x8D));
+    // 16 bytes params area
+    payload.append(QByteArray(16, '\0'));
+    // data
+    payload.append(data);
+    return payload;
+}
+
+// Helper: build multi-block param response (for time commands)
+static QByteArray buildMockMultiParamBlock(const QByteArray& data1, const QByteArray& data2)
+{
+    QByteArray payload;
+    payload.reserve(2 + 2 * (24 + 8));
+    // Block count = 2
+    payload.append('\x00');
+    payload.append('\x02');
+    // Block 1
+    quint16 blockLen = static_cast<quint16>(24 + data1.size());
+    payload.append(FanucFrameBuilder::encodeInt16(blockLen));
+    payload.append('\x00'); payload.append('\x01'); // ncFlag
+    payload.append('\x00'); payload.append('\x01'); // reserved
+    payload.append('\x00'); payload.append(static_cast<char>(0x8D)); // funcCode
+    payload.append(QByteArray(16, '\0')); // params
+    payload.append(data1);
+    // Block 2
+    blockLen = static_cast<quint16>(24 + data2.size());
+    payload.append(FanucFrameBuilder::encodeInt16(blockLen));
+    payload.append('\x00'); payload.append('\x01'); // ncFlag
+    payload.append('\x00'); payload.append('\x01'); // reserved
+    payload.append('\x00'); payload.append(static_cast<char>(0x8D)); // funcCode
+    payload.append(QByteArray(16, '\0')); // params
+    payload.append(data2);
+    return payload;
+}
+
+// Helper: encode calcValue as 8 bytes: numerator(4B) + base(2B) + exp(2B)
+static QByteArray encodeCalcValue(double value)
+{
+    using FB = FanucFrameBuilder;
+    // Convert to numerator / 10^4 format
+    qint32 numerator = static_cast<qint32>(value * 10000);
+    QByteArray data;
+    data.append(FB::encodeInt32(numerator));
+    data.append(FB::encodeInt16(10));  // base
+    data.append(FB::encodeInt16(4));   // exp
+    return data;
+}
 
 QByteArray FanucProtocol::mockResponseData(quint8 cmdCode, const QByteArray& requestData)
 {
     using FB = FanucFrameBuilder;
 
     switch (cmdCode) {
-    case 0x01: { // 系统信息 - block response with NC type + device type
-        QByteArray block(QByteArray(28, '\0'));
-        // Block length
-        block[0] = '\x00'; block[1] = '\x1C';
-        // NC type at offset 8..27
-        QByteArray ncType = QByteArray("31i            ", 20); // "31i" padded to 20
-        block.replace(8, 20, ncType);
-        // Device type at offset 28..31 (but block is only 28B so append)
-        block.append(FB::encodeInt32(0x0B));
-        // Pad block length field
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x01: { // 系统信息 — ncType at rawData[22], deviceType at rawData[24]
+        QByteArray payload;
+        payload.reserve(30);
+        // Block count
+        payload.append('\x00'); payload.append('\x01');
+        // Block length = 28
+        payload.append('\x00'); payload.append('\x1C');
+        // ncFlag
+        payload.append('\x00'); payload.append('\x01');
+        // reserved
+        payload.append('\x00'); payload.append('\x01');
+        // funcCode = 0x0018
+        payload.append('\x00'); payload.append('\x18');
+        // rawData[10-21]: 12 bytes padding
+        payload.append(QByteArray(12, '\0'));
+        // rawData[22-23]: ncType = "31"
+        payload.append("31", 2);
+        // rawData[24-25]: deviceType = "0B"
+        payload.append("0B", 2);
+        // rawData[26-27]: padding
+        payload.append(QByteArray(2, '\0'));
+        return payload;
     }
-    case 0x02: { // 运行信息
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24'; // length 36
-        // mode=1(MEM), status=1(running), emg=0, alm=0
-        block.append(FB::encodeInt16(1));   // mode
-        block.append(FB::encodeInt16(1));   // status
-        block.append(FB::encodeInt16(0));   // emergency
-        block.append(FB::encodeInt16(0));   // alarm
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x02: { // 运行信息 — mode at rawData[18], status at [20], emg at [26], alm at [28]
+        QByteArray data;
+        data.append(FB::encodeInt16(1));   // mode = MEM
+        data.append(FB::encodeInt16(1));   // status = STOP
+        data.append(FB::encodeInt16(0));   // padding
+        data.append(FB::encodeInt16(0));   // padding
+        data.append(FB::encodeInt16(0));   // emg = 0
+        data.append(FB::encodeInt16(0));   // alm = 0
+        return buildMockNCBlock(0x19, data);
     }
-    case 0x03: { // 主轴速度 = 1500.0
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24'; // length 36
-        // calcValue encoding: numerator / base^exp
-        // 1500.0 = 15000000 / 10^4
-        block.append(FB::encodeInt32(15000000));
-        block.append(FB::encodeInt16(10));   // base
-        block.append(FB::encodeInt16(4));    // exp
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x03: // 主轴速度 — calcValue at rawData[18]
+        return buildMockNCBlock(0x25, encodeCalcValue(1500.0));
+    case 0x04: // 主轴负载 — calcValue at rawData[18]
+        return buildMockNCBlock(0x40, encodeCalcValue(45.0));
+    case 0x05: { // 主轴倍率 — byte at rawData[18]
+        QByteArray data;
+        data.append(static_cast<char>(100)); // 100%
+        return buildMockNCBlock(0x01, data); // funcCode echoed, value at data offset
     }
-    case 0x04: { // 主轴负载 = 45%
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24'; // length 36
-        block.append(FB::encodeInt32(1));   // count = 1
-        block.append(FB::encodeInt32(45));  // load = 45%
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x06: { // 主轴速度设定值 — int32 at rawData[18]
+        QByteArray data;
+        data.append(FB::encodeInt32(2000));
+        return buildMockNCBlock(0x01, data);
     }
-    case 0x05: { // 主轴倍率 = 100%
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x1D'; // length 29
-        block.append(static_cast<char>(100));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x07: // 进给速度 — calcValue at rawData[18]
+        return buildMockNCBlock(0x24, encodeCalcValue(500.0));
+    case 0x08: { // 进给倍率 — 255 - byte at rawData[18]
+        QByteArray data;
+        data.append(static_cast<char>(255 - 120)); // 120% stored as 255-120
+        return buildMockNCBlock(0x01, data);
     }
-    case 0x06: { // 主轴速度设定值 = 2000
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20'; // length 32
-        block.append(FB::encodeInt32(2000));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x09: // 进给速度设定值 — calcValue at rawData[18]
+        return buildMockNCBlock(0x15, encodeCalcValue(800.0));
+    case 0x0A: // 工件数 — calcValue at rawData[18]
+        return buildMockNCBlock(0x15, encodeCalcValue(42.0));
+    case 0x0B: { // 运行时间 — multi-block: ms=calcValue(rawData[26]), min=calcValue(rawData[26+block1Len])
+        // Block 1: ms (param 6751) = 30000 ms
+        // Block 2: min (param 6752) = 60 minutes → 60*60 + 30000/1000 = 3630 seconds
+        return buildMockMultiParamBlock(encodeCalcValue(30000.0), encodeCalcValue(60.0));
     }
-    case 0x07: { // 进给速度 = 500.0
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24'; // length 36
-        // 500.0 = 5000000 / 10^4
-        block.append(FB::encodeInt32(5000000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x0C: { // 加工时间
+        return buildMockMultiParamBlock(encodeCalcValue(18000.0), encodeCalcValue(30.0));
     }
-    case 0x08: { // 进给倍率 = 120%
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x1D'; // length 29
-        block.append(static_cast<char>(120));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x0D: { // 循环时间
+        return buildMockMultiParamBlock(encodeCalcValue(0.0), encodeCalcValue(2.0));
     }
-    case 0x09: { // 进给速度设定值 = 800.0 (macro 4109)
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24'; // length 36
-        // 800.0 = 8000000 / 10^4
-        block.append(FB::encodeInt32(8000000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x0E: // 上电时间 — single param: calcValue at rawData[26], min*60
+        return buildMockParamBlock(encodeCalcValue(1440.0)); // 1440 minutes = 86400 seconds
+    case 0x0F: { // 程序号 — int32 at rawData[18]
+        QByteArray data;
+        data.append(FB::encodeInt32(1234));
+        return buildMockNCBlock(0x1C, data);
     }
-    case 0x0A: { // 工件数 = 42 (macro 3901)
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24'; // length 36
-        // 42 = 420000 / 10^4
-        block.append(FB::encodeInt32(420000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x0B: { // 运行时间 = 3600秒 (param 6751)
-        QByteArray block1(QByteArray(28, '\0'));
-        block1[0] = '\x00'; block1[1] = '\x20'; // length 32
-        block1.append(FB::encodeInt32(3600));
-        qint32 len1 = block1.size();
-        block1[0] = static_cast<char>((len1 >> 8) & 0xFF);
-        block1[1] = static_cast<char>(len1 & 0xFF);
-        return block1;
-    }
-    case 0x0C: { // 加工时间 = 1800秒 (param 6753)
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20';
-        block.append(FB::encodeInt32(1800));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x0D: { // 循环时间 = 120秒 (param 6757)
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20';
-        block.append(FB::encodeInt32(120));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x0E: { // 上电时间 = 86400秒 (param 6750)
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20';
-        block.append(FB::encodeInt32(86400));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x0F: { // 程序号 = O1234
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20';
-        block.append(FB::encodeInt32(1234));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x10: { // 刀具号 = T5 (macro 4120)
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24';
-        // 5 = 50000 / 10^4
-        block.append(FB::encodeInt32(50000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x11: { // 告警信息 - no alarms
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20';
-        block.append(FB::encodeInt32(0)); // count = 0
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x10: // 刀具号 — calcValue at rawData[18]
+        return buildMockNCBlock(0x15, encodeCalcValue(5.0));
+    case 0x11: { // 告警信息 — dataLength at rawData[14], no alarms
+        QByteArray payload;
+        payload.reserve(22);
+        payload.append('\x00'); payload.append('\x01'); // block count
+        payload.append('\x00'); payload.append('\x10'); // block length = 16
+        payload.append('\x00'); payload.append('\x01'); // ncFlag
+        payload.append('\x00'); payload.append('\x01'); // reserved
+        payload.append('\x00'); payload.append('\x23'); // funcCode = 0x23
+        payload.append(QByteArray(4, '\0')); // rawData[10-13]
+        payload.append(FB::encodeInt32(0));  // rawData[14-17] = dataLength = 0
+        return payload;
     }
     case 0x12: // 绝对坐标
     case 0x13: // 机械坐标
     case 0x14: // 相对坐标
-    case 0x15: { // 剩余距离坐标 - 3 axes: X=100.500, Y=200.300, Z=-50.000
-        QByteArray block(QByteArray(28, '\0'));
-        // axis count = 3
-        block.append(FB::encodeInt32(3));
-        // X = 100.500 = 1005000 / 10^4
-        block.append(FB::encodeInt32(1005000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        // Y = 200.300 = 2003000 / 10^4
-        block.append(FB::encodeInt32(2003000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        // Z = -50.000 = -500000 / 10^4
-        block.append(FB::encodeInt32(-500000));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x15: { // 剩余距离坐标 — x=calcValue(rawData[18]), y=calcValue(rawData[26]), z=calcValue(rawData[34])
+        QByteArray data;
+        data.append(encodeCalcValue(100.500));  // X
+        data.append(encodeCalcValue(200.300));  // Y
+        data.append(encodeCalcValue(-50.000));  // Z
+        return buildMockNCBlock(0x26, data);
     }
-    case 0x16: { // 读宏变量 - return value from request addr
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24';
-        // Return mock value 123.4560 = 1234560 / 10^4
-        block.append(FB::encodeInt32(1234560));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
+    case 0x16: // 读宏变量 — calcValue at rawData[18]
+        return buildMockNCBlock(0x15, encodeCalcValue(123.456));
+    case 0x17: // 写宏变量
+        return buildMockNCBlock(0x16, QByteArray());
+    case 0x18: { // 读PMC — byte at rawData[18]
+        QByteArray data;
+        data.append(static_cast<char>(0x01));
+        return buildMockNCBlock(0x01, data); // PMC response with 1 byte
     }
-    case 0x17: { // 写宏变量 - echo back the written value
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x24';
-        // Echo the numerator from the request if available, else default
-        qint32 numerator = 0;
-        if (requestData.size() >= 8) {
-            // Request data contains the write macro block; numerator is at the end
-            // For simplicity, return mock 100.0
-            numerator = 1000000;
-        }
-        block.append(FB::encodeInt32(numerator));
-        block.append(FB::encodeInt16(10));
-        block.append(FB::encodeInt16(4));
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x18: { // 读PMC - return 1 byte value
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x1D'; // length 29
-        block.append(static_cast<char>(0x01)); // mock PMC value
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
-    case 0x19: { // 写PMC - return success
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x1C'; // length 28
-        return block;
-    }
-    case 0x1A: { // 读参数 - return param value
-        QByteArray block(QByteArray(28, '\0'));
-        block[0] = '\x00'; block[1] = '\x20';
-        block.append(FB::encodeInt32(100)); // mock param value
-        qint32 totalLen = block.size();
-        block[0] = static_cast<char>((totalLen >> 8) & 0xFF);
-        block[1] = static_cast<char>(totalLen & 0xFF);
-        return block;
-    }
+    case 0x19: // 写PMC
+        return buildMockNCBlock(0x02, QByteArray());
+    case 0x1A: // 读参数 — calcValue at rawData[26]
+        return buildMockParamBlock(encodeCalcValue(100.0));
     default:
         return QByteArray();
     }

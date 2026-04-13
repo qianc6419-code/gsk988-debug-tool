@@ -486,10 +486,10 @@ QByteArray SiemensProtocol::mockResponseData(quint8 cmdCode, const QByteArray& r
         return QByteArray::fromHex("0300000b11d00000000100");
     }
     if (cmdCode == 0xFE) {
-        return QByteArray::fromHex("0300001602f08032030000010000080000f0000001000103c0");
+        return QByteArray::fromHex("0300001902f08032030000010000080000f0000001000103c0");
     }
     if (cmdCode == 0xFD) {
-        return QByteArray::fromHex("0300001b02f080320300000100000c00000004011108820100140001"
+        return QByteArray::fromHex("0300002502f080320300000100000c00000004011108820100140001"
                                    "3b010300000702f000");
     }
 
@@ -498,7 +498,7 @@ QByteArray SiemensProtocol::mockResponseData(quint8 cmdCode, const QByteArray& r
     auto buildSingleReadResponse = [&](const QByteArray& itemData) -> QByteArray {
         int paramLen = 1;
         int dataLen = 1 + 1 + 1 + 2 + itemData.size();
-        int totalLen = 4 + 2 + 12 + paramLen + dataLen;
+        int totalLen = 25 + itemData.size();
 
         QByteArray frame;
         frame.append('\x03'); frame.append('\x00');
