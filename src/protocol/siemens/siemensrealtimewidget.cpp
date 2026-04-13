@@ -425,11 +425,170 @@ void SiemensRealtimeWidget::startCycle()
     emit pollRequest(item.cmdCode, item.params);
 }
 
-// ========== Update Data (STUB) ==========
+// ========== Update Data ==========
 
 void SiemensRealtimeWidget::updateData(const ParsedResponse& resp)
 {
-    Q_UNUSED(resp);
+    if (!resp.isValid || m_pollIndex < 0 || m_pollIndex >= PI_COUNT)
+        return;
+
+    using FB = SiemensFrameBuilder;
+    const QByteArray& data = resp.rawData;
+
+    switch (m_pollIndex) {
+    // ===== Row 0 — 运行状态 =====
+    case PI_MODE:
+        setLabelOK(m_modeLabel, FB::parseMode(data));
+        break;
+    case PI_STATUS:
+        setLabelOK(m_runStatusLabel, FB::parseStatus(data));
+        break;
+    case PI_SPINDLE_SET_SPEED:
+        setLabelOK(m_spindleSetSpeedLabel, QString::number(FB::parseDouble(data), 'f', 0) + " RPM");
+        break;
+    case PI_SPINDLE_ACT_SPEED:
+        setLabelOK(m_spindleActSpeedLabel, QString::number(FB::parseDouble(data), 'f', 0) + " RPM");
+        break;
+    case PI_SPINDLE_RATE:
+        setLabelOK(m_spindleRateLabel, QString::number(FB::parseDouble(data), 'f', 0) + " %");
+        break;
+    case PI_FEED_SET_SPEED:
+        setLabelOK(m_feedSetSpeedLabel, QString::number(FB::parseDouble(data), 'f', 0) + " mm/min");
+        break;
+    case PI_FEED_ACT_SPEED:
+        setLabelOK(m_feedActSpeedLabel, QString::number(FB::parseDouble(data), 'f', 0) + " mm/min");
+        break;
+    case PI_FEED_RATE:
+        setLabelOK(m_feedRateLabel, QString::number(FB::parseDouble(data), 'f', 0) + " %");
+        break;
+    case PI_ALARM_NUM: {
+        m_alarmCount = FB::parseInt32(data);
+        if (m_alarmCount <= 0) {
+            setLabelOK(m_alarmIndicator, QStringLiteral("无告警"));
+            m_alarmTextLabel->setText(QStringLiteral("无告警"));
+            m_alarmTextLabel->setStyleSheet("color: green;");
+            m_alarmMessages.clear();
+        } else {
+            setLabelOK(m_alarmIndicator, QString("有(%1)").arg(m_alarmCount));
+            m_alarmIndicator->setStyleSheet("color: red; font-weight: bold;");
+            // Alarm details queried via manual command, here just show count
+        }
+        break;
+    }
+
+    // ===== Row 1 — 系统信息 =====
+    case PI_CNC_ID:
+        setLabelOK(m_cncIdLabel, FB::parseString(data));
+        break;
+    case PI_CNC_TYPE:
+        setLabelOK(m_cncTypeLabel, FB::parseString(data));
+        break;
+    case PI_VER_INFO:
+        setLabelOK(m_verInfoLabel, FB::parseString(data));
+        break;
+
+    // ===== Row 1 — 计数时间 =====
+    case PI_PRODUCTS:
+        setLabelOK(m_productsLabel, QString::number(FB::parseDouble(data), 'f', 0));
+        break;
+    case PI_SET_PRODUCTS:
+        setLabelOK(m_setProductsLabel, QString::number(FB::parseDouble(data), 'f', 0));
+        break;
+    case PI_CYCLE_TIME: {
+        double secs = FB::parseDouble(data);
+        int h = static_cast<int>(secs) / 3600;
+        int mi = (static_cast<int>(secs) % 3600) / 60;
+        int s = static_cast<int>(secs) % 60;
+        setLabelOK(m_cycleTimeLabel, QString("%1:%2:%3")
+            .arg(h, 2, 10, QChar('0'))
+            .arg(mi, 2, 10, QChar('0'))
+            .arg(s, 2, 10, QChar('0')));
+        break;
+    }
+    case PI_REMAIN_TIME: {
+        double secs = FB::parseDouble(data);
+        int h = static_cast<int>(secs) / 3600;
+        int mi = (static_cast<int>(secs) % 3600) / 60;
+        int s = static_cast<int>(secs) % 60;
+        setLabelOK(m_remainTimeLabel, QString("%1:%2:%3")
+            .arg(h, 2, 10, QChar('0'))
+            .arg(mi, 2, 10, QChar('0'))
+            .arg(s, 2, 10, QChar('0')));
+        break;
+    }
+
+    // ===== Row 1 — 程序与刀具 =====
+    case PI_PROG_NAME:
+        setLabelOK(m_progNameLabel, FB::parseString(data));
+        break;
+    case PI_TOOL_NUM:
+        setLabelOK(m_toolNumLabel, "T" + QString::number(FB::parseInt16(data)));
+        break;
+    case PI_TOOL_D:
+        setLabelOK(m_toolDLabel, "D" + QString::number(FB::parseInt16(data)));
+        break;
+    case PI_TOOL_H:
+        setLabelOK(m_toolHLabel, "H" + QString::number(FB::parseInt16(data)));
+        break;
+    case PI_TOOL_X_LEN:
+        setLabelOK(m_toolXLenLabel, QString::number(FB::parseDouble(data), 'f', 3));
+        break;
+    case PI_TOOL_Z_LEN:
+        setLabelOK(m_toolZLenLabel, QString::number(FB::parseDouble(data), 'f', 3));
+        break;
+    case PI_TOOL_RADIU:
+        setLabelOK(m_toolRadiuLabel, QString::number(FB::parseDouble(data), 'f', 3));
+        break;
+    case PI_TOOL_EDG:
+        setLabelOK(m_toolEdgLabel, QString::number(FB::parseDouble(data), 'f', 0));
+        break;
+
+    // ===== Row 2 — 坐标 =====
+    case PI_AXIS_NAME: {
+        QString names = FB::parseString(data);
+        QStringList parts = names.split(' ', QString::SkipEmptyParts);
+        for (int i = 0; i < 3 && i < parts.size(); ++i) {
+            m_axisNameLabels[i]->setText(parts[i]);
+        }
+        break;
+    }
+    case PI_MACH_X: case PI_MACH_Y: case PI_MACH_Z:
+        setLabelOK(m_posMach[m_pollIndex - PI_MACH_X],
+            QString::number(FB::parseDouble(data), 'f', 3));
+        break;
+    case PI_WORK_X: case PI_WORK_Y: case PI_WORK_Z:
+        setLabelOK(m_posWork[m_pollIndex - PI_WORK_X],
+            QString::number(FB::parseDouble(data), 'f', 3));
+        break;
+    case PI_REMAIN_X: case PI_REMAIN_Y: case PI_REMAIN_Z:
+        setLabelOK(m_posRemain[m_pollIndex - PI_REMAIN_X],
+            QString::number(FB::parseDouble(data), 'f', 3));
+        break;
+
+    // ===== Row 2 — 驱动诊断 =====
+    case PI_DRIVE_VOLTAGE:
+        setLabelOK(m_driveVoltageLabel, QString::number(FB::parseFloat(data), 'f', 1) + " V");
+        break;
+    case PI_DRIVE_CURRENT:
+        setLabelOK(m_driveCurrentLabel, QString::number(FB::parseFloat(data), 'f', 1) + " A");
+        break;
+    case PI_DRIVE_LOAD1:
+        setLabelOK(m_driveLoad1Label, QString::number(FB::parseFloat(data), 'f', 1) + " kW");
+        break;
+    case PI_SPINDLE_LOAD1:
+        setLabelOK(m_spindleLoad1Label, QString::number(FB::parseFloat(data), 'f', 1) + " %");
+        break;
+    case PI_SPINDLE_LOAD2:
+        setLabelOK(m_spindleLoad2Label, QString::number(FB::parseFloat(data), 'f', 1) + " %");
+        break;
+    case PI_DRIVE_TEMPER:
+        setLabelOK(m_driveTemperLabel, QString::number(FB::parseFloat(data), 'f', 1) + " C");
+        break;
+
+    default:
+        break;
+    }
+
     // Advance to next poll item
     m_pollIndex++;
     if (m_pollIndex >= PI_COUNT) {
