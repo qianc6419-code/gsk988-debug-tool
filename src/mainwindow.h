@@ -31,6 +31,9 @@ class MazakProtocol;
 class KndRealtimeWidget;
 class KndCommandWidget;
 class KndProtocol;
+class SyntecRealtimeWidget;
+class SyntecCommandWidget;
+class SyntecProtocol;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT

@@ -52,6 +52,12 @@ SOURCES += \
     src/protocol/knd/kndrealtimewidget.cpp \
     src/protocol/knd/kndcommandwidget.cpp \
     src/protocol/knd/kndparsewidget.cpp \
+    src/protocol/syntec/syntecframebuilder.cpp \
+    src/protocol/syntec/syntecprotocol.cpp \
+    src/protocol/syntec/syntecwidgetfactory.cpp \
+    src/protocol/syntec/syntecrealtimewidget.cpp \
+    src/protocol/syntec/synteccommandwidget.cpp \
+    src/protocol/syntec/syntecparsewidget.cpp \
     src/ui/logwidget.cpp
 
 HEADERS += \
@@ -99,5 +105,11 @@ HEADERS += \
     src/protocol/knd/kndrealtimewidget.h \
     src/protocol/knd/kndcommandwidget.h \
     src/protocol/knd/kndparsewidget.h \
+    src/protocol/syntec/syntecframebuilder.h \
+    src/protocol/syntec/syntecprotocol.h \
+    src/protocol/syntec/syntecwidgetfactory.h \
+    src/protocol/syntec/syntecrealtimewidget.h \
+    src/protocol/syntec/synteccommandwidget.h \
+    src/protocol/syntec/syntecparsewidget.h \
     src/ui/iprotocolwidgetfactory.h \
     src/ui/logwidget.h

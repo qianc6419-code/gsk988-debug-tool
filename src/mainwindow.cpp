@@ -27,6 +27,10 @@
 #include "protocol/knd/kndrealtimewidget.h"
 #include "protocol/knd/kndcommandwidget.h"
 #include "protocol/knd/kndrestclient.h"
+#include "protocol/syntec/syntecprotocol.h"
+#include "protocol/syntec/syntecwidgetfactory.h"
+#include "protocol/syntec/syntecrealtimewidget.h"
+#include "protocol/syntec/synteccommandwidget.h"
 #include "network/mockserver.h"
 #include "ui/logwidget.h"
 #include "protocol/iprotocol.h"
@@ -96,6 +100,7 @@ void MainWindow::setupToolBar()
     m_protocolCombo->addItem("Siemens S7");
     m_protocolCombo->addItem("Mazak Smooth");
     m_protocolCombo->addItem("KND REST API");
+    m_protocolCombo->addItem("Syntec 新代");
     m_toolbar->addWidget(m_protocolCombo);
 
     m_toolbar->addSeparator();
@@ -168,6 +173,8 @@ void MainWindow::switchProtocol(int index)
         if (mazakRt) mazakRt->stopPolling();
         auto* kndRt = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
         if (kndRt) kndRt->stopPolling();
+        auto* syntecRt = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+        if (syntecRt) syntecRt->stopPolling();
     }
 
     // Stop mock server if running
@@ -213,6 +220,10 @@ void MainWindow::switchProtocol(int index)
     case 5:
         m_protocol = new KndProtocol(this);
         m_widgetFactory = new KndWidgetFactory;
+        break;
+    case 6:
+        m_protocol = new SyntecProtocol(this);
+        m_widgetFactory = new SyntecWidgetFactory;
         break;
     default:
         m_protocol = new Gsk988Protocol(this);
@@ -322,6 +333,13 @@ void MainWindow::switchTransport(int index)
             QByteArray frame = siemens->buildHandshake();
             m_transport->send(frame);
             m_logTab->logFrame(frame, true, "[握手1/3] Siemens S7");
+        } else if (m_protocolCombo->currentIndex() == 6) {
+            // Syntec: send handshake, polling starts after response
+            m_needStartPolling = true;
+            auto* syntec = qobject_cast<SyntecProtocol*>(m_protocol);
+            QByteArray handshakeFrame = syntec->buildHandshake();
+            m_transport->send(handshakeFrame);
+            m_logTab->logFrame(handshakeFrame, true, "[握手] Syntec 新代");
         }
     });
 
@@ -362,6 +380,11 @@ void MainWindow::switchTransport(int index)
         if (kndRtDisc2) {
             kndRtDisc2->stopPolling();
             kndRtDisc2->clearData();
+        }
+        auto* syntecRtDisc = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+        if (syntecRtDisc) {
+            syntecRtDisc->stopPolling();
+            syntecRtDisc->clearData();
         }
     });
 
@@ -578,6 +601,50 @@ void MainWindow::setupProtocolConnections()
             m_timeoutTimer->start();
         });
     }
+
+    // Syntec realtime widget
+    auto* syntecRt = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+    if (syntecRt) {
+        connect(syntecRt, &SyntecRealtimeWidget::pollRequest,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            auto* srt = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+            if (srt) srt->appendHexDisplay(frame, true);
+
+            m_timeoutTimer->start();
+        });
+    }
+
+    // Syntec command widget
+    auto* syntecCmd = qobject_cast<SyntecCommandWidget*>(m_commandTab);
+    if (syntecCmd) {
+        connect(syntecCmd, &SyntecCommandWidget::sendCommand,
+                this, [this](quint8 cmdCode, const QByteArray& params) {
+            if (!m_transport || !m_transport->isConnected()) return;
+
+            QByteArray frame = m_protocol->buildRequest(cmdCode, params);
+            m_waitingManualResponse = true;
+            m_transport->send(frame);
+
+            auto cdef = m_protocol->commandDef(cmdCode);
+            QString desc = QString("[0x%1] %2")
+                               .arg(cmdCode, 2, 16, QChar('0')).toUpper()
+                               .arg(cdef.name);
+            m_logTab->logFrame(frame, true, desc);
+
+            m_timeoutTimer->start();
+        });
+    }
 }
 
 void MainWindow::onDataReceived(const QByteArray& rawData)
@@ -651,12 +718,20 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
             siemensRt->updateData(resp);
         }
 
+        // Route to Syntec realtime tab
+        auto* syntecRtData = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+        if (syntecRtData) {
+            syntecRtData->appendHexDisplay(frame, false);
+            syntecRtData->updateData(resp);
+        }
+
         // Start polling after receiving the permission (0x0A) response
         if (m_needStartPolling) {
             m_needStartPolling = false;
             if (rt) rt->startPolling();
             if (fanucRt) fanucRt->startPolling();
             if (siemensRt) siemensRt->startPolling();
+            if (syntecRtData) syntecRtData->startPolling();
         }
 
         // Only show in command tab if this was a manual send
@@ -688,6 +763,11 @@ void MainWindow::onDataReceived(const QByteArray& rawData)
                 QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
                 siemensCmdW->showResponse(resp, interp);
             }
+            auto* syntecCmdW = qobject_cast<SyntecCommandWidget*>(m_commandTab);
+            if (syntecCmdW) {
+                QString interp = m_protocol->interpretData(resp.cmdCode, resp.rawData);
+                syntecCmdW->showResponse(resp, interp);
+            }
         }
     }
 }
@@ -712,6 +792,9 @@ void MainWindow::onResponseTimeout()
 
     auto* siemensRt = qobject_cast<SiemensRealtimeWidget*>(m_realtimeTab);
     if (siemensRt) siemensRt->updateData(dummy);
+
+    auto* syntecRtTimeout = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+    if (syntecRtTimeout) syntecRtTimeout->updateData(dummy);
 }
 
 void MainWindow::onConnectClicked()
@@ -850,6 +933,8 @@ void MainWindow::onConnectClicked()
         if (mazakRt) mazakRt->stopPolling();
         auto* kndRtDisc = qobject_cast<KndRealtimeWidget*>(m_realtimeTab);
         if (kndRtDisc) kndRtDisc->stopPolling();
+        auto* syntecRtConn = qobject_cast<SyntecRealtimeWidget*>(m_realtimeTab);
+        if (syntecRtConn) syntecRtConn->stopPolling();
         if (m_mockServer) m_mockServer->stop();
         m_transport->disconnectFromHost();
         return;
