@@ -148,8 +148,9 @@ QString SyntecProtocol::interpretData(quint8 cmdCode, const QByteArray& data) co
 
 QByteArray SyntecProtocol::mockResponse(quint8 cmdCode, const QByteArray& requestData) const
 {
-    // Extract tid from request
-    quint8 tid = (requestData.size() > 10) ? static_cast<quint8>(requestData[10]) : 0;
+    // Use m_pendingTid which was set by buildRequest before this call
+    Q_UNUSED(requestData);
+    quint8 tid = m_pendingTid;
 
     // Build response: [4B totalLen][4B vendor=0xC8][2B vendor2=0xC8][1B tid][1B 0x00][4B err1=0][4B err2=0][data...]
     auto buildResp = [](quint8 t, const QByteArray& data) -> QByteArray {
