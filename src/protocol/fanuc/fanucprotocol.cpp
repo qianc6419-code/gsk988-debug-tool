@@ -179,8 +179,8 @@ QByteArray FanucProtocol::buildRequest(quint8 cmdCode, const QByteArray& params)
         QByteArray block = FB::buildReadMacroBlock(4109);
         return wrapBlock(block);
     }
-    case 0x0A: { // 工件数 - macro read 3901
-        QByteArray block = FB::buildReadMacroBlock(3901);
+    case 0x0A: { // 工件数 - param read 6711 (标准FOCAS方法)
+        QByteArray block = FB::buildReadParamBlock(6711);
         return wrapBlock(block);
     }
     case 0x0B: { // 运行时间 - param 6751+6752
@@ -201,8 +201,8 @@ QByteArray FanucProtocol::buildRequest(quint8 cmdCode, const QByteArray& params)
     }
     case 0x0F: // 程序号
         return FB::buildSingleBlockRequest(1, 0x1C, QByteArray(20, '\0'));
-    case 0x10: { // 刀具号 - macro read 4120
-        QByteArray block = FB::buildReadMacroBlock(4120);
+    case 0x10: { // 刀具号 - macro read 4320 (更广泛正确的选择)
+        QByteArray block = FB::buildReadMacroBlock(4320);
         return wrapBlock(block);
     }
     case 0x11: { // 告警信息
@@ -409,10 +409,14 @@ QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
         switch (mode) {
         case 0: modeStr = QStringLiteral("MDI"); break;
         case 1: modeStr = QStringLiteral("MEM"); break;
-        case 3: modeStr = QStringLiteral("EDT"); break;
-        case 4: modeStr = QStringLiteral("HAND"); break;
+        case 3: modeStr = QStringLiteral("EDIT"); break;
+        case 4: modeStr = QStringLiteral("HANDLE"); break;
         case 5: modeStr = QStringLiteral("JOG"); break;
-        case 10: modeStr = QStringLiteral("TAPE"); break;
+        case 6: modeStr = QStringLiteral("TEACH-JOG"); break;
+        case 7: modeStr = QStringLiteral("TEACH-HANDLE"); break;
+        case 8: modeStr = QStringLiteral("INC"); break;
+        case 9: modeStr = QStringLiteral("REF"); break;
+        case 10: modeStr = QStringLiteral("RMT"); break;
         default: modeStr = QString::number(mode); break;
         }
         QString statusStr;
@@ -459,9 +463,9 @@ QString FanucProtocol::interpretDataRaw(quint8 cmdCode, const QByteArray& data)
         double val = FB::calcValue(data, 18);
         return QStringLiteral("进给速度设定值: %1").arg(val, 0, 'f', 2);
     }
-    case 0x0A: { // 工件数 (macro) — ref: calcValue at frame[28]
-        if (data.size() < 26) return hexDump(data);
-        double val = FB::calcValue(data, 18);
+    case 0x0A: { // 工件数 (param 6711) — ref: calcValue at rawData[26]
+        if (data.size() < 34) return hexDump(data);
+        double val = FB::calcValue(data, 26);
         return QStringLiteral("工件数: %1").arg(val, 0, 'f', 0);
     }
     case 0x0B: // 运行时间 (param 6751+6752, 2 blocks) — ref: calcValue at frame[36], second at frame[36+block1Len]
@@ -782,8 +786,8 @@ QByteArray FanucProtocol::mockResponseData(quint8 cmdCode, const QByteArray& req
     }
     case 0x09: // 进给速度设定值 — calcValue at rawData[18]
         return buildMockNCBlock(0x15, encodeCalcValue(800.0));
-    case 0x0A: // 工件数 — calcValue at rawData[18]
-        return buildMockNCBlock(0x15, encodeCalcValue(42.0));
+    case 0x0A: // 工件数 — param 6711: calcValue at rawData[26]
+        return buildMockParamBlock(encodeCalcValue(42.0));
     case 0x0B: { // 运行时间 — multi-block: ms=calcValue(rawData[26]), min=calcValue(rawData[26+block1Len])
         // Block 1: ms (param 6751) = 30000 ms
         // Block 2: min (param 6752) = 60 minutes → 60*60 + 30000/1000 = 3630 seconds

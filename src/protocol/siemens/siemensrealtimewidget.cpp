@@ -435,6 +435,12 @@ void SiemensRealtimeWidget::updateData(const ParsedResponse& resp)
     using FB = SiemensFrameBuilder;
     const QByteArray& data = resp.rawData;
 
+    // Validate S7 return code (byte 21 should be 0xFF for success)
+    if (!FB::isResponseOK(data)) {
+        // S7 read error — advance to next poll item without updating
+        goto advance;
+    }
+
     switch (m_pollIndex) {
     // ===== Row 0 — 运行状态 =====
     case PI_MODE:
@@ -589,6 +595,7 @@ void SiemensRealtimeWidget::updateData(const ParsedResponse& resp)
         break;
     }
 
+advance:
     // Advance to next poll item
     m_pollIndex++;
     if (m_pollIndex >= PI_COUNT) {

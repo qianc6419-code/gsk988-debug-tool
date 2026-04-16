@@ -160,12 +160,14 @@ static QString modeStr(qint16 mode)
     switch (mode) {
     case 0:  return "MDI";
     case 1:  return "MEM";
-    case 3:  return "NO SEARCH";
-    case 4:  return "EDIT";
-    case 5:  return "HANDLE";
-    case 7:  return "INC";
-    case 8:  return "JOG";
-    case 11: return "REF";
+    case 3:  return "EDIT";
+    case 4:  return "HANDLE";
+    case 5:  return "JOG";
+    case 6:  return "TEACH-JOG";
+    case 7:  return "TEACH-HANDLE";
+    case 8:  return "INC";
+    case 9:  return "REF";
+    case 10: return "RMT";
     default: return QString::number(mode);
     }
 }
@@ -501,9 +503,9 @@ void FanucRealtimeWidget::updateData(const ParsedResponse& resp)
             }
             break;
         }
-        case PI_PRODUCTS: { // 0x0A 工件数 — calcValue at rawData[18]
-            if (data.size() >= 26) {
-                double val = FB::calcValue(data, 18);
+        case PI_PRODUCTS: { // 0x0A 工件数 — param 6711: calcValue at rawData[26]
+            if (data.size() >= 34) {
+                double val = FB::calcValue(data, 26);
                 setLabelOK(m_productsLabel, QString::number(val, 'f', 0));
             }
             break;

@@ -116,21 +116,10 @@ const QByteArray SiemensFrameBuilder::HANDSHAKE_2 =
                         "00010008000"
                         "0f0000064006403c0");
 
-// HANDSHAKE_3: S7 Setup (29 bytes)
-// 03 00 00 1D  02 F0 80  32 01 00 00 00 01 00 00 C0 00 00 04 01 12 08 82 01 00 14 00 01 3B
+// HANDSHAKE_3: S7 Setup (33 bytes)
+// 使用 buildReadVar 构造正确的 Read Var 请求
 const QByteArray SiemensFrameBuilder::HANDSHAKE_3 =
-    QByteArray("\x03\x00\x00\x1D" // TPKT: 29
-               "\x02\xF0\x80"     // COTP Data
-               "\x32\x01"         // S7 Protocol + Job
-               "\x00\x00"         // Reserved
-               "\x00\x01"         // PDU Ref
-               "\x00\x00"         // Param length = 0
-               "\xC0\x00"         // Data length = 49152 (0xC000)
-               "\x00\x04"         // Error
-               "\x01\x12\x08\x82" // Read Var, 1 item, var spec, addr len=8
-               "\x01\x00\x14"     // Transport=1, numElem Hi, ...
-               "\x00\x01\x3B",    // ...
-               29);
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x04, 0x00);
 
 // ===== 系统信息 =====
 
@@ -230,13 +219,13 @@ const QByteArray SiemensFrameBuilder::CMD_TOOL_EDG =
 // ===== 坐标 =====
 
 const QByteArray SiemensFrameBuilder::CMD_MACH_POS =
-    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x02);
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x02);
 
 const QByteArray SiemensFrameBuilder::CMD_WORK_POS =
-    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x19);
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x19);
 
 const QByteArray SiemensFrameBuilder::CMD_REMAIN_POS =
-    buildReadVar(0x02, 2, 0x0001, 0x82, 0x00, 0x41, 0x03);
+    buildReadVar(0x02, 1, 0x0001, 0x82, 0x00, 0x41, 0x03);
 
 const QByteArray SiemensFrameBuilder::CMD_AXIS_NAME =
     buildReadVar(0x02, 20, 0x0001, 0x82, 0x00, 0x4E, 0x70);
@@ -454,6 +443,15 @@ QByteArray SiemensFrameBuilder::buildPLCReadCmd(int byteOffset)
     return cmd;
 }
 
+// ===== 响应校验 =====
+bool SiemensFrameBuilder::isResponseOK(const QByteArray& frame)
+{
+    // S7 Read Var Ack Data: return code at byte 21
+    // 0xFF = success, anything else = error
+    if (frame.size() < 22) return false;
+    return static_cast<quint8>(frame[21]) == 0xFF;
+}
+
 // ===== 响应解析 =====
 QString SiemensFrameBuilder::parseString(const QByteArray& frame)
 {
@@ -477,24 +475,18 @@ float SiemensFrameBuilder::parseFloat(const QByteArray& frame)
 
 double SiemensFrameBuilder::parseDouble(const QByteArray& frame)
 {
-    if (frame.size() < 33) {
-        if (frame.size() >= 8) {
-            double value;
-            std::memcpy(&value, frame.constData(), 8);
-            return value;
-        }
+    // S7 响应格式: TPKT头(4) + COTP头(3) + S7头(10) + 参数段 + 数据段
+    // 数据段通常从 offset 25 开始
+    const int dataOffset = 25;
+
+    if (frame.size() < dataOffset + 8) {
         return 0.0;
     }
-    // C# code: if (datas[3] == 33) → take 8 bytes from offset 25
-    if (static_cast<quint8>(frame[3]) == 33) {
-        double value;
-        std::memcpy(&value, frame.constData() + 25, 8);
-        return value;
-    } else {
-        double value;
-        std::memcpy(&value, frame.constData(), 8);
-        return value;
-    }
+
+    // 从 offset 25 读取 8 字节 double
+    double value;
+    std::memcpy(&value, frame.constData() + dataOffset, 8);
+    return value;
 }
 
 qint32 SiemensFrameBuilder::parseInt32(const QByteArray& frame)

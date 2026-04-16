@@ -10,7 +10,7 @@ public:
     // ===== 握手帧 =====
     static const QByteArray HANDSHAKE_1;  // COTP Connect Request (22字节)
     static const QByteArray HANDSHAKE_2;  // S7 Communication Setup (25字节)
-    static const QByteArray HANDSHAKE_3;  // S7 Setup (37字节)
+    static const QByteArray HANDSHAKE_3;  // S7 Setup Read Var (33字节)
 
     // ===== 系统信息 =====
     static const QByteArray CMD_CNC_ID;         // 0x01 CNC标识
@@ -102,12 +102,16 @@ public:
     // PLC 读 DB1600：修改最后字节为偏移量 (byteOffset * 8)
     static QByteArray buildPLCReadCmd(int byteOffset);
 
+    // ===== 响应校验 =====
+    // 检查 S7 Read Var 响应返回码 (byte 21 == 0xFF 表示成功)
+    static bool isResponseOK(const QByteArray& frame);
+
     // ===== 响应解析 =====
     // String: offset 25, UTF-8, 去\0
     static QString parseString(const QByteArray& frame);
     // Float: offset 25, 4字节小端(reverse后转float)
     static float parseFloat(const QByteArray& frame);
-    // Double: frame[3]==33时offset 25取8字节, 否则offset 0
+    // Double: offset 25取8字节
     static double parseDouble(const QByteArray& frame);
     // Int32: offset 25, 4字节
     static qint32 parseInt32(const QByteArray& frame);
