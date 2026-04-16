@@ -23,6 +23,9 @@ public:
     void setHandle(unsigned short h) { m_handle = h; m_connected = (h != 0); }
     void clearConnection() { m_handle = 0; m_connected = false; }
 
+    // 连接健康检查
+    bool healthCheck();
+
     // 运行状态
     bool getRunningInfo(MTC_RUNNING_INFO& out);
     bool getRunningSts(unsigned short path, short& out);

@@ -18,6 +18,9 @@ public:
     void setMockMode(bool mock);
     bool isMockMode() const;
 
+    // 连接健康检查
+    bool healthCheck();
+
     // === 读取方法 (GET) ===
     void getSystemInfo();
     void getStatus();

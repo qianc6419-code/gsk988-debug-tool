@@ -1,6 +1,22 @@
 #include "syntecframebuilder.h"
 #include <cstring>
 
+// ===== Vendor ID configuration =====
+// 默认 Vendor ID: 0xC8 (新代标准)
+static quint8 s_vendorId = 0xC8;
+
+// 设置 Vendor ID（用于不同型号的 Syntec 设备）
+void SyntecFrameBuilder::setVendorId(quint8 vendorId)
+{
+    s_vendorId = vendorId;
+}
+
+// 获取当前 Vendor ID
+quint8 SyntecFrameBuilder::getVendorId()
+{
+    return s_vendorId;
+}
+
 // ===== Packet templates (tid at byte[10] is placeholder, set dynamically) =====
 
 struct SyntecCmdDef {
@@ -38,8 +54,17 @@ QByteArray SyntecFrameBuilder::buildPacket(quint8 cmdCode, quint8 tid)
     for (int i = 0; i < s_cmdDefCount; ++i) {
         if (s_cmdDefs[i].cmdCode == cmdCode) {
             QByteArray pkt = QByteArray::fromHex(s_cmdDefs[i].hex);
+
+            // 设置 tid（位置 10）
             if (pkt.size() > 10)
                 pkt[10] = static_cast<char>(tid);
+
+            // 替换硬编码的 Vendor ID（位置 9 和 11）
+            if (pkt.size() > 11) {
+                pkt[9] = static_cast<char>(s_vendorId);
+                pkt[11] = static_cast<char>(s_vendorId);
+            }
+
             return pkt;
         }
     }
@@ -157,8 +182,25 @@ QString SyntecFrameBuilder::formatTime(int seconds)
 
 bool SyntecFrameBuilder::isEmptyResponse(const QByteArray& data)
 {
+    if (data.size() < 12) return false;
+
+    // 原始模式：00 00 00 00 FF FF 00 00 00 00 00 00
+    // 更灵活的匹配方式：
+    // 1. 前两个字节为空（长度字段可能不同）
+    // 2. 位置 10 的 cmdCode = 0xFF（keepalive 标识）
+    // 或者：
+    // 3. 完全匹配原始模式（向后兼容）
+
+    // 检查 cmdCode = 0xFF（位置 10）
+    if (static_cast<quint8>(data[10]) == 0xFF) {
+        // 检查前 4 字节是否为 00（长度字段可能指示空响应）
+        bool first4Zero = (data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0);
+        return first4Zero;
+    }
+
+    // 向后兼容：完全匹配原始模式
     static const char pattern[] = {0x00, 0x00, 0x00, 0x00,
                                     static_cast<char>(0xFF), static_cast<char>(0xFF),
                                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    return data.size() >= 12 && memcmp(data.constData(), pattern, 12) == 0;
+    return memcmp(data.constData(), pattern, 12) == 0;
 }

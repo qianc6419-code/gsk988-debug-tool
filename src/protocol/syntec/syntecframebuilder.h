@@ -10,6 +10,10 @@ public:
     // Build request packet for given command code with tid
     static QByteArray buildPacket(quint8 cmdCode, quint8 tid);
 
+    // Vendor ID configuration
+    static void setVendorId(quint8 vendorId);
+    static quint8 getVendorId();
+
     // Response validation
     static bool checkFrame(const QByteArray& frame, quint8 expectedTid);
     static quint8 extractTid(const QByteArray& frame);

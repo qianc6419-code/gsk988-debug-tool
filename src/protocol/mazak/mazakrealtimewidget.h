@@ -17,6 +17,9 @@ public:
     void stopPolling();
     void clearData();
 
+signals:
+    void disconnected();
+
 private slots:
     void onPollTimeout();
 
@@ -30,6 +33,7 @@ private:
     void updateTimeLabels(const struct MAZ_ACCUM_TIME& at);
 
     QTimer* m_pollTimer;
+    int m_healthCheckCounter;
 
     // 第1行: 系统状态
     QLabel* m_statusLabel;

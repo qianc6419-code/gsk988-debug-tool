@@ -1,8 +1,10 @@
 #include "protocol/knd/kndrestclient.h"
 
+#include <QCoreApplication>
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
+#include <QThread>
 #include <QUrl>
 
 KndRestClient& KndRestClient::instance()
@@ -27,6 +29,52 @@ void KndRestClient::setConnected(bool connected) { m_connected = connected; }
 void KndRestClient::setMockMode(bool mock) { m_mockMode = mock; }
 bool KndRestClient::isMockMode() const { return m_mockMode; }
 
+bool KndRestClient::healthCheck()
+{
+    if (m_mockMode) return true;  // Mock 模式总是返回 true
+
+    QUrl url(m_baseUrl + "/status");
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    req.setTransferTimeout(5000);  // 健康检查用更短的超时
+
+    bool healthy = false;
+    bool finished = false;
+
+    auto* reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, &healthy, &finished]() {
+        reply->deleteLater();
+        finished = true;
+
+        if (reply->error() == QNetworkReply::NoError) {
+            // 检查 HTTP 状态码
+            int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (statusCode == 200) {
+                healthy = true;
+                setConnected(true);
+            } else {
+                setConnected(false);
+            }
+        } else {
+            qWarning() << "KND 健康检查失败:" << reply->errorString();
+            setConnected(false);
+        }
+    });
+
+    // 同步等待（最多 6 秒）
+    for (int i = 0; i < 12 && !finished; ++i) {
+        QCoreApplication::processEvents();
+        QThread::msleep(50);
+    }
+
+    if (!finished) {
+        qWarning() << "KND 健康检查超时";
+        setConnected(false);
+    }
+
+    return healthy;
+}
+
 // === 内部 HTTP 方法 ===
 
 void KndRestClient::sendGet(const QString& path,
@@ -36,13 +84,36 @@ void KndRestClient::sendGet(const QString& path,
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
+    // 设置超时：10秒
+    static const int TIMEOUT_MS = 10000;
+    req.setTransferTimeout(TIMEOUT_MS);
+
     auto* reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, handler]() {
         reply->deleteLater();
+
+        // 检查网络错误
         if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "KND GET error:" << reply->errorString();
             emit errorOccurred(reply->errorString());
+            // 如果是连接错误，更新连接状态
+            if (reply->error() == QNetworkReply::ConnectionRefusedError ||
+                reply->error() == QNetworkReply::HostNotFoundError ||
+                reply->error() == QNetworkReply::NetworkSessionFailedError ||
+                reply->error() == QNetworkReply::RemoteHostClosedError) {
+                setConnected(false);
+            }
             return;
         }
+
+        // 检查 HTTP 状态码
+        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (statusCode >= 400) {
+            qWarning() << "KND HTTP error:" << statusCode;
+            emit errorOccurred(QString("HTTP %1").arg(statusCode));
+            return;
+        }
+
         QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
         if (doc.isObject()) {
             handler(doc.object());
@@ -86,14 +157,37 @@ void KndRestClient::sendPut(const QString& path, const QJsonObject& body,
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
+    // 设置超时：10秒
+    static const int TIMEOUT_MS = 10000;
+    req.setTransferTimeout(TIMEOUT_MS);
+
     QJsonDocument doc(body);
     auto* reply = m_nam->put(req, doc.toJson());
     connect(reply, &QNetworkReply::finished, this, [this, reply, operation]() {
         reply->deleteLater();
+
+        // 检查网络错误
         if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "KND PUT error:" << reply->errorString();
             emit writeResultReceived(operation, false, reply->errorString());
+
+            // 连接错误时更新状态
+            if (reply->error() == QNetworkReply::ConnectionRefusedError ||
+                reply->error() == QNetworkReply::HostNotFoundError ||
+                reply->error() == QNetworkReply::RemoteHostClosedError) {
+                setConnected(false);
+            }
             return;
         }
+
+        // 检查 HTTP 状态码
+        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (statusCode >= 400) {
+            qWarning() << "KND HTTP error:" << statusCode;
+            emit writeResultReceived(operation, false, QString("HTTP %1").arg(statusCode));
+            return;
+        }
+
         QByteArray data = reply->readAll();
         QJsonDocument respDoc = QJsonDocument::fromJson(data);
         if (respDoc.isObject()) {
@@ -102,6 +196,7 @@ void KndRestClient::sendPut(const QString& path, const QJsonObject& body,
                 emit writeResultReceived(operation, false, resp["error-message"].toString());
             } else {
                 emit writeResultReceived(operation, true, "成功");
+                setConnected(true);
             }
         } else {
             emit writeResultReceived(operation, true, "成功");

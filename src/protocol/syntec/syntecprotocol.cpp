@@ -71,12 +71,25 @@ QByteArray SyntecProtocol::extractFrame(QByteArray& buffer)
         buffer.remove(0, 12);
     }
 
+    // TCP 分包容错：至少需要 4 字节来读取长度字段
     if (buffer.size() < 4) return QByteArray();
 
+    // 读取长度字段（小端 32 位）
     qint32 totalLen = 0;
     memcpy(&totalLen, buffer.constData(), 4);
+
+    // 安全检查：长度字段必须为正值且在合理范围内
+    // Syntec 帧通常 20-100 字节，设置上限防止恶意或错误数据
+    const quint32 MAX_FRAME_SIZE = 1000;
+    if (totalLen <= 0 || static_cast<quint32>(totalLen) > MAX_FRAME_SIZE) {
+        // 长度字段无效，丢弃整个缓冲区防止卡住
+        buffer.clear();
+        return QByteArray();
+    }
+
     quint32 frameSize = static_cast<quint32>(totalLen) + 4;
 
+    // 等待完整的帧到达（TCP 分包）
     if (static_cast<quint32>(buffer.size()) < frameSize)
         return QByteArray();
 

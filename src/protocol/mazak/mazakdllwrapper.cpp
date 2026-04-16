@@ -27,6 +27,33 @@ bool MazakDLLWrapper::isLoaded() const
     return m_library.isLoaded();
 }
 
+bool MazakDLLWrapper::healthCheck()
+{
+    // 如果没有连接，返回 false
+    if (!m_connected || m_handle == 0) {
+        return false;
+    }
+
+    // 如果 DLL 未加载，返回 false
+    if (!m_library.isLoaded()) {
+        clearConnection();
+        return false;
+    }
+
+    // 执行健康检查：尝试获取运行状态（简单的查询）
+    short status = 0;
+    if (m_getRunningSts) {
+        int result = m_getRunningSts(m_handle, 0, &status);
+        if (result != 0) {
+            // 调用失败，连接可能已断开
+            clearConnection();
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void MazakDLLWrapper::unload()
 {
     if (m_connected && m_disconnect && m_handle) {

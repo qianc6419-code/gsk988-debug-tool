@@ -11,6 +11,7 @@
 MazakRealtimeWidget::MazakRealtimeWidget(QWidget* parent)
     : QWidget(parent)
     , m_pollTimer(new QTimer(this))
+    , m_healthCheckCounter(0)
 {
     setupUI();
     m_pollTimer->setInterval(500);
@@ -149,6 +150,21 @@ void MazakRealtimeWidget::onPollTimeout()
     if (!dll.isConnected()) {
         stopPolling();
         return;
+    }
+
+    // 每秒进行一次健康检查（每2个poll周期）
+    m_healthCheckCounter++;
+    if (m_healthCheckCounter >= 2) {
+        m_healthCheckCounter = 0;
+
+        // 执行健康检查
+        if (!dll.healthCheck()) {
+            qWarning() << "Mazak 连接健康检查失败";
+            clearData();
+            stopPolling();
+            emit disconnected();  // 通知上层连接断开
+            return;
+        }
     }
 
     // Mock 模式：DLL 未加载时显示模拟数据
